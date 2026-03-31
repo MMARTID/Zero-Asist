@@ -11,5 +11,5 @@ venv/
 .idea/
 .vscode/
 
-
-        
+app/collectors/token.json
+app/collectors/credentials.json
