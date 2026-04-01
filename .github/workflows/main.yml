@@ -1,49 +1,36 @@
-name: CI/CD Workflow
+name: CI
 
-# Ejecuta el workflow en eventos específicos
 on:
-  push:
-    branches:
-      - main  # Cuando hay un push a la rama 'main'
   pull_request:
-    branches:
-      - main  # Cuando se crea/modifica un pull request hacia la rama 'main'
+    branches: [dev]
+  push:
+    branches: [dev]
 
-# Define los trabajos (jobs) del workflow
 jobs:
   build-and-test:
-    # Corre en la máquina virtual con Ubuntu
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Chequea el código del repositorio
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # 2. Configura Python
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.11  # Versión de Python
+          python-version: "3.11"
+          cache: "pip"  # 🔥 cache automático
 
-      # 3. Instala dependencias
       - name: Install dependencies
         run: |
-          python -m venv venv
-          source venv/bin/activate
-          pip install --upgrade pip setuptools wheel
+          pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 4. Verifica el formato del código con flake8
-      - name: Lint code with flake8
+      - name: Lint (flake8)
         run: |
-          source venv/bin/activate
           pip install flake8
           flake8 app/
 
-      # 5. Ejecuta las pruebas con pytest
-      - name: Run tests with pytest
+      - name: Test (pytest)
         run: |
-          source venv/bin/activate
           pip install pytest
           pytest tests/
