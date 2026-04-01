@@ -1,74 +1,72 @@
-# normalizer.py
 import re
 from datetime import datetime, date
-from typing import Any, Dict
+from typing import Any, Dict, Callable, List
 
 def normalize_date(date_str: str | None) -> date | None:
     if not date_str or date_str == "null":
         return None
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d").date()
-    except ValueError:
-        pass
-    try:
-        return datetime.strptime(date_str, "%d/%m/%Y").date()
-    except ValueError:
-        return None
+    date_formats = ["%Y-%m-%d", "%d/%m/%Y"]  # Lista de formatos soportados
+    for fmt in date_formats:
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 def normalize_number(value: Any) -> float | None:
     """Convierte a float, manejando comas decimales y cadenas vacías."""
-    if value is None or value == "null":
+    if value in (None, "null", ""):
         return None
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
-        # Reemplazar coma decimal por punto
         value = value.replace(',', '.')
-        # Eliminar espacios y separadores de miles (puntos, comas, etc.)
-        value = re.sub(r'[^\d.-]', '', value)
+        value = re.sub(r'[^\d.-]', '', value)  # Limpia caracteres no numéricos
         try:
             return float(value)
         except ValueError:
             return None
     return None
 
+def normalize_list(items: Any, normalizer: Callable[[Dict[str, Any]], Dict[str, Any]]) -> list:
+    """
+    Normaliza listas de elementos con un normalizador específico.
+
+    Args:
+        items: Lista de elementos a procesar.
+        normalizer: Función que procesa cada elemento individual.
+    """
+    if not items or not isinstance(items, list):
+        return []
+    return [normalizer(item) for item in items if isinstance(item, dict)]
+
+def normalize_tax_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Normaliza un único desglose de impuestos."""
+    return {
+        "rate": normalize_number(item.get("rate")),
+        "base": normalize_number(item.get("base")),
+        "amount": normalize_number(item.get("amount"))
+    }
+
 def normalize_tax_breakdown(items: Any) -> list:
     """Normaliza la lista de desglose de impuestos."""
-    if not items:
-        return []
-    if not isinstance(items, list):
-        return []
-    normalized = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        normalized.append({
-            "rate": normalize_number(item.get("rate")),
-            "base": normalize_number(item.get("base")),
-            "amount": normalize_number(item.get("amount"))
-        })
-    return normalized
+    return normalize_list(items, normalize_tax_item)
+
+def normalize_line_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Normaliza un único elemento de línea."""
+    return {
+        "description": str(item.get("description", "")).strip() or None,
+        "quantity": normalize_number(item.get("quantity")),
+        "unit_price": normalize_number(item.get("unit_price")),
+        "base": normalize_number(item.get("base")),
+        "tax_rate": normalize_number(item.get("tax_rate")),
+        "tax_amount": normalize_number(item.get("tax_amount")),
+        "total": normalize_number(item.get("total"))
+    }
 
 def normalize_line_items(items: Any) -> list:
     """Normaliza la lista de líneas de detalle."""
-    if not items:
-        return []
-    if not isinstance(items, list):
-        return []
-    normalized = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        normalized.append({
-            "description": str(item.get("description", "")).strip() or None,
-            "quantity": normalize_number(item.get("quantity")),
-            "unit_price": normalize_number(item.get("unit_price")),
-            "base": normalize_number(item.get("base")),
-            "tax_rate": normalize_number(item.get("tax_rate")),
-            "tax_amount": normalize_number(item.get("tax_amount")),
-            "total": normalize_number(item.get("total"))
-        })
-    return normalized
+    return normalize_list(items, normalize_line_item)
 
 def normalize_extracted_data(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Aplica todas las normalizaciones al diccionario extraído."""
