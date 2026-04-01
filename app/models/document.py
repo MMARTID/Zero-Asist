@@ -1,6 +1,6 @@
 from enum import Enum
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import date, datetime
 
 
@@ -23,7 +23,7 @@ class ExtractedData(BaseModel):
     invoice_number: Optional[str] = None
     issue_date: Optional[str] = None
     total_amount: Optional[float] = None
-    raw: dict = Field(default_factory=dict)
+    raw: Dict[str, Any] = Field(default_factory=dict)
 
 
 class TaxBreakdownItem(BaseModel):
@@ -79,7 +79,7 @@ class InvoiceIssuedData(BaseModel):
 
 
 class BankTransaction(BaseModel):
-    date: Optional[date] = None
+    date: Optional[str] = None        # str para compatibilidad con Gemini
     description: Optional[str] = None
     amount: Optional[float] = None
     type: Optional[str] = None  # "credit" o "debit"
@@ -100,9 +100,43 @@ class BankStatementData(BaseModel):
     transactions: List[BankTransaction] = Field(default_factory=list)
 
 
+class ExtractedPayload(BaseModel):
+    """
+    Modelo unificado con todos los campos posibles según el tipo de documento.
+    Todos los campos son opcionales; Gemini solo rellena los que aplican.
+    Compatible con Gemini response_schema (sin dict ni additionalProperties).
+    """
+    # --- Campos comunes a facturas (invoice_received / invoice_issued) ---
+    issuer_name: Optional[str] = None
+    issuer_tax_id: Optional[str] = None
+    receiver_name: Optional[str] = None
+    receiver_tax_id: Optional[str] = None
+    invoice_number: Optional[str] = None
+    series: Optional[str] = None
+    issue_date: Optional[str] = None       # str para máxima compatibilidad con Gemini
+    due_date: Optional[str] = None
+    base_amount: Optional[float] = None
+    tax_amount: Optional[float] = None
+    total_amount: Optional[float] = None
+    currency: Optional[str] = None
+    payment_method: Optional[str] = None
+    tax_breakdown: List[TaxBreakdownItem] = Field(default_factory=list)
+    line_items: List[LineItem] = Field(default_factory=list)
+    confidence_score: Optional[float] = None
+    # --- Campos de bank_statement ---
+    bank_name: Optional[str] = None
+    account_holder: Optional[str] = None
+    iban: Optional[str] = None
+    period_start: Optional[str] = None    # str para máxima compatibilidad con Gemini
+    period_end: Optional[str] = None
+    opening_balance: Optional[float] = None
+    closing_balance: Optional[float] = None
+    transactions: List[BankTransaction] = Field(default_factory=list)
+
+
 class DocumentoExtraido(BaseModel):
     document_type: DocumentType
-    data: dict = Field(default_factory=dict)
+    data: ExtractedPayload = Field(default_factory=ExtractedPayload)
 
 
 # Alias de compatibilidad
@@ -116,5 +150,5 @@ class DocumentoNormalizado(BaseModel):
     document_hash: str
     document_type: DocumentType
     extracted_data: ExtractedData
-    normalized_data: dict
+    normalized_data: Dict[str, Any]
     created_at: datetime
