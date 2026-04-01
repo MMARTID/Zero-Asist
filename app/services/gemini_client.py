@@ -3,13 +3,17 @@ import os
 import json
 from dotenv import load_dotenv
 from google.genai import Client, types
-from app.models.document import FacturaData
+from app.models.document import DocumentoExtraido
 
 load_dotenv()
 
 SYSTEM_INSTRUCTION = (
-    "Eres un asistente especializado en extracción de datos de facturas. "
-    "Analiza el documento proporcionado y extrae todos los campos disponibles. "
+    "Eres un asistente especializado en extracción y clasificación de documentos financieros y administrativos. "
+    "Analiza el documento proporcionado, identifica su tipo y extrae todos los campos disponibles. "
+    "El campo 'document_type' debe ser uno de los siguientes valores: "
+    "invoice_received, invoice_issued, receipt, bank_statement, payroll, "
+    "social_security_form, delivery_note, contract, tax_authority_communication, other. "
+    "El campo 'data' debe contener los campos extraídos del documento según su tipo. "
     "Si un campo no está presente en el documento, devuelve null. "
     "Responde únicamente con el JSON estructurado, sin texto adicional."
 )
@@ -21,9 +25,9 @@ generation_config = types.GenerateContentConfig(
     temperature=0,
     top_p=0.95,
     top_k=1,
-    max_output_tokens=2048,
+    max_output_tokens=4096,
     response_mime_type="application/json",
-    response_schema=FacturaData,
+    response_schema=DocumentoExtraido,
 )
 
 

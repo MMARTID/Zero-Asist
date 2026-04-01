@@ -2,9 +2,9 @@ import hashlib
 import uuid
 from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from app.models.document import DocumentoNormalizado, FacturaData, ExtractedData
+from app.models.document import DocumentoNormalizado, DocumentType, ExtractedData
 from app.services.gemini_client import extract_from_pdf, extract_from_file
-from app.ingestion.normalizer import normalize_extracted_data 
+from app.ingestion.normalizer import normalize_document
 from app.services.firestore_client import guardar_documento
 
 app = FastAPI()
@@ -44,38 +44,55 @@ async def procesar_documento(file: UploadFile = File(...)):
     doc_hash = hashlib.sha256(contenido).hexdigest()
 
     try:
-        # 🔥 Llamamos a Gemini SOLO una vez
+        # Llamamos a Gemini SOLO una vez → devuelve { document_type, data }
         raw_extracted = extract_from_file(contenido, mime_type)
 
-        # Intentamos mapear a ExtractedData
+        document_type_str = raw_extracted.get("document_type", "other")
         try:
-            extracted_obj = ExtractedData(**raw_extracted, raw=raw_extracted)
-        except Exception:
-            extracted_obj = ExtractedData(raw=raw_extracted)
+            document_type = DocumentType(document_type_str)
+        except ValueError:
+            document_type = DocumentType.other
 
-        # Normalizamos
-        normalized = normalize_extracted_data(raw_extracted)
+        data = raw_extracted.get("data", {})
+
+        # Intentamos mapear a ExtractedData para compatibilidad
+        try:
+            extracted_obj = ExtractedData(
+                issuer_name=data.get("issuer_name"),
+                issuer_tax_id=data.get("issuer_tax_id"),
+                invoice_number=data.get("invoice_number"),
+                issue_date=data.get("issue_date"),
+                total_amount=data.get("total_amount"),
+                raw=data
+            )
+        except Exception:
+            extracted_obj = ExtractedData(raw=data)
+
+        # Normalizamos según el tipo de documento
+        normalized = normalize_document(data, document_type.value)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en extracción: {str(e)}")
 
-    factura_data = FacturaData(**normalized)
-
     doc_id = str(uuid.uuid4())
     now = datetime.utcnow()
 
-    normalized_dict = factura_data.dict()
-    for field in ["issue_date", "due_date"]:
+    # Convertir fechas date → datetime para Firestore
+    normalized_dict = dict(normalized)
+    for field in ["issue_date", "due_date", "period_start", "period_end"]:
         if normalized_dict.get(field):
-            normalized_dict[field] = datetime.combine(normalized_dict[field], datetime.min.time())
+            val = normalized_dict[field]
+            if hasattr(val, 'year'):  # es un objeto date
+                normalized_dict[field] = datetime.combine(val, datetime.min.time())
 
     documento = DocumentoNormalizado(
         id=doc_id,
         file_name=file.filename,
         file_size=len(contenido),
         document_hash=doc_hash,
+        document_type=document_type,
         extracted_data=extracted_obj,
-        normalized_data=factura_data,
+        normalized_data=normalized_dict,
         created_at=now
     )
 
@@ -86,10 +103,12 @@ async def procesar_documento(file: UploadFile = File(...)):
             **documento.dict(exclude={"normalized_data"}),
             "normalized_data": normalized_dict,
             "extracted_data": extracted_obj.dict(),
+            "document_type": document_type.value,
         }
     )
-    
+
     return {
         "documento_id": doc_id,
-        "normalized_data": factura_data.dict()
+        "document_type": document_type.value,
+        "normalized_data": normalized_dict
     }

@@ -1,6 +1,21 @@
+from enum import Enum
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import date, datetime
+
+
+class DocumentType(str, Enum):
+    invoice_received = "invoice_received"
+    invoice_issued = "invoice_issued"
+    receipt = "receipt"
+    bank_statement = "bank_statement"
+    payroll = "payroll"
+    social_security_form = "social_security_form"
+    delivery_note = "delivery_note"
+    contract = "contract"
+    tax_authority_communication = "tax_authority_communication"
+    other = "other"
+
 
 class ExtractedData(BaseModel):
     issuer_name: Optional[str] = None
@@ -10,10 +25,12 @@ class ExtractedData(BaseModel):
     total_amount: Optional[float] = None
     raw: dict = Field(default_factory=dict)
 
+
 class TaxBreakdownItem(BaseModel):
     rate: Optional[float] = None
     base: Optional[float] = None
     amount: Optional[float] = None
+
 
 class LineItem(BaseModel):
     description: Optional[str] = None
@@ -24,7 +41,8 @@ class LineItem(BaseModel):
     tax_amount: Optional[float] = None
     total: Optional[float] = None
 
-class FacturaData(BaseModel):
+
+class InvoiceReceivedData(BaseModel):
     issuer_name: Optional[str] = None
     issuer_tax_id: Optional[str] = None
     invoice_number: Optional[str] = None
@@ -40,11 +58,63 @@ class FacturaData(BaseModel):
     line_items: List[LineItem] = Field(default_factory=list)
     confidence_score: Optional[float] = None
 
+
+class InvoiceIssuedData(BaseModel):
+    receiver_name: Optional[str] = None
+    receiver_tax_id: Optional[str] = None
+    issuer_name: Optional[str] = None
+    issuer_tax_id: Optional[str] = None
+    invoice_number: Optional[str] = None
+    series: Optional[str] = None
+    issue_date: Optional[date] = None
+    due_date: Optional[date] = None
+    base_amount: Optional[float] = None
+    tax_amount: Optional[float] = None
+    total_amount: Optional[float] = None
+    currency: str = "EUR"
+    payment_method: Optional[str] = None
+    tax_breakdown: List[TaxBreakdownItem] = Field(default_factory=list)
+    line_items: List[LineItem] = Field(default_factory=list)
+    confidence_score: Optional[float] = None
+
+
+class BankTransaction(BaseModel):
+    date: Optional[date] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    type: Optional[str] = None  # "credit" o "debit"
+    balance: Optional[float] = None
+    reference: Optional[str] = None
+    counterparty: Optional[str] = None
+
+
+class BankStatementData(BaseModel):
+    bank_name: Optional[str] = None
+    account_holder: Optional[str] = None
+    iban: Optional[str] = None
+    currency: str = "EUR"
+    period_start: Optional[date] = None
+    period_end: Optional[date] = None
+    opening_balance: Optional[float] = None
+    closing_balance: Optional[float] = None
+    transactions: List[BankTransaction] = Field(default_factory=list)
+
+
+class DocumentoExtraido(BaseModel):
+    document_type: DocumentType
+    data: dict = Field(default_factory=dict)
+
+
+# Alias de compatibilidad
+FacturaData = InvoiceReceivedData
+
+
 class DocumentoNormalizado(BaseModel):
-    id: str  # lo generaremos con uuid
+    id: str
     file_name: str
     file_size: int
     document_hash: str
-    extracted_data: ExtractedData 
-    normalized_data: FacturaData
+    document_type: DocumentType
+    extracted_data: ExtractedData
+    normalized_data: dict
     created_at: datetime
