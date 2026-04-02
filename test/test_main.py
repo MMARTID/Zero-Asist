@@ -1,5 +1,6 @@
 # tests/test_main.py
 
+from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 from app.main import app
 
@@ -22,8 +23,18 @@ def test_procesar_documento(monkeypatch):
             }
         }
 
-    def fake_guardar(*args, **kwargs):
+    def fake_guardar_si_no_existe(*args, **kwargs):
         return None
+
+    fake_snapshot = MagicMock()
+    fake_snapshot.exists = False
+    fake_doc_ref = MagicMock()
+    fake_doc_ref.get.return_value = fake_snapshot
+    fake_collection = MagicMock()
+    fake_collection.document.return_value = fake_doc_ref
+    fake_db = MagicMock()
+    fake_db.collection.return_value = fake_collection
+    fake_db.transaction.return_value = MagicMock()
 
     monkeypatch.setattr(
         "app.main.extract_from_file",
@@ -31,8 +42,13 @@ def test_procesar_documento(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "app.main.guardar_documento",
-        fake_guardar
+        "app.main.guardar_si_no_existe",
+        fake_guardar_si_no_existe
+    )
+
+    monkeypatch.setattr(
+        "app.main.db",
+        fake_db
     )
 
     response = client.post(
