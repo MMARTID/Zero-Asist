@@ -1,11 +1,10 @@
 import hashlib
-import uuid
 from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from app.models.document import DocumentoNormalizado, DocumentType, ExtractedData
 from app.services.gemini_client import extract_from_pdf, extract_from_file
 from app.ingestion.normalizer import normalize_document
-from app.services.firestore_client import guardar_documento
+from app.services.firestore_client import db, guardar_si_no_existe
 
 app = FastAPI()
 
@@ -43,6 +42,10 @@ async def procesar_documento(file: UploadFile = File(...)):
 
     doc_hash = hashlib.sha256(contenido).hexdigest()
 
+    # 🔥 CHECK RÁPIDO (ANTES DE GEMINI)
+    doc_ref = db.collection("documentos").document(doc_hash)
+    if doc_ref.get().exists:
+        raise HTTPException(status_code=409, detail="Documento duplicado")
     try:
         # Llamamos a Gemini SOLO una vez → devuelve { document_type, data }
         raw_extracted = extract_from_file(contenido, mime_type)
@@ -74,7 +77,7 @@ async def procesar_documento(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en extracción: {str(e)}")
 
-    doc_id = str(uuid.uuid4())
+    doc_id = doc_hash  # Usamos el hash como ID del documento
     now = datetime.utcnow()
 
     # Convertir fechas date → datetime para Firestore
@@ -96,16 +99,22 @@ async def procesar_documento(file: UploadFile = File(...)):
         created_at=now
     )
 
-    guardar_documento(
-        "documentos",
-        doc_id,
-        {
-            **documento.dict(exclude={"normalized_data"}),
-            "normalized_data": normalized_dict,
-            "extracted_data": extracted_obj.dict(),
-            "document_type": document_type.value,
-        }
-    )
+    transaction = db.transaction()
+
+    try:
+        guardar_si_no_existe(
+            transaction,
+            "documentos",
+            doc_hash,
+            {
+                **documento.dict(exclude={"normalized_data"}),
+                "normalized_data": normalized_dict,
+                "extracted_data": extracted_obj.dict(),
+                "document_type": document_type.value,
+            }
+        )
+    except ValueError:
+        raise HTTPException(status_code=409, detail="Documento duplicado")
 
     return {
         "documento_id": doc_id,
