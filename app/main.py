@@ -2,7 +2,7 @@ import hashlib
 from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from app.models.document import DocumentoNormalizado, DocumentType, ExtractedData
-from app.services.gemini_client import extract_from_pdf, extract_from_file
+from app.services.gemini_client import extract_from_file
 from app.ingestion.normalizer import normalize_document
 from app.services.firestore_client import db, guardar_si_no_existe
 
