@@ -3,7 +3,7 @@
 from app.services import gemini_client
 
 def test_extract_from_file_mock(monkeypatch):
-    fake_response = '{"issuer_name": "Test SL"}'
+    fake_response = '{"document_type": "invoice_received", "data": {"issuer_name": "Test SL"}}'
 
     class FakeResponse:
         text = fake_response
@@ -19,4 +19,5 @@ def test_extract_from_file_mock(monkeypatch):
 
     result = gemini_client.extract_from_file(b"fake", "application/pdf")
 
-    assert result["issuer_name"] == "Test SL"
+    assert result["document_type"] == "invoice_received"
+    assert result["data"]["issuer_name"] == "Test SL"

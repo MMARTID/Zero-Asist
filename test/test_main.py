@@ -9,14 +9,17 @@ def test_procesar_documento(monkeypatch):
 
     def fake_extract(file_bytes, mime_type):
         return {
-            "issuer_name": "Empresa Test",
-            "issue_date": "2024-01-01",
-            "base_amount": 100,
-            "tax_amount": 21,
-            "total_amount": 121,
-            "currency": "EUR",
-            "tax_breakdown": [],
-            "line_items": []
+            "document_type": "invoice_received",
+            "data": {
+                "issuer_name": "Empresa Test",
+                "issue_date": "2024-01-01",
+                "base_amount": 100,
+                "tax_amount": 21,
+                "total_amount": 121,
+                "currency": "EUR",
+                "tax_breakdown": [],
+                "line_items": []
+            }
         }
 
     def fake_guardar(*args, **kwargs):
@@ -40,4 +43,5 @@ def test_procesar_documento(monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert "documento_id" in data
+    assert data["document_type"] == "invoice_received"
     assert data["normalized_data"]["issuer_name"] == "Empresa Test"
