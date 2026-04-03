@@ -113,25 +113,23 @@ def _extract_parts(
     filename = part.get("filename", "")
     body = part.get("body", {})
 
-    # Parte con adjunto directo
+    # Parte con adjunto permitido: priorizar attachmentId y, si no existe,
+    # usar los datos inline en base64.
     if filename and mime_type in ALLOWED_MIME_TYPES:
+        data = None
         attachment_id = body.get("attachmentId")
+
         if attachment_id:
             data = _download_attachment(service, message_id, attachment_id)
-            if data:
-                result.append({
-                    "filename": filename,
-                    "mime_type": mime_type,
-                    "data": data,
-                })
+        elif body.get("data"):
+            data = base64.urlsafe_b64decode(body["data"])
 
-    # Parte con datos inline en base64
-    elif filename and mime_type in ALLOWED_MIME_TYPES and body.get("data"):
-        result.append({
-            "filename": filename,
-            "mime_type": mime_type,
-            "data": base64.urlsafe_b64decode(body["data"]),
-        })
+        if data:
+            result.append({
+                "filename": filename,
+                "mime_type": mime_type,
+                "data": data,
+            })
 
     # Recorrer sub-partes (multipart/*)
     for sub_part in part.get("parts", []):
