@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def poll_gmail(
-    query: str = "has:attachment (filename:pdf OR filename:PDF OR filename:xml OR filename:jpg OR filename:png)",
+    query: str = "has:attachment (filename:pdf OR filename:xml OR filename:jpg OR filename:png)",
     max_results: int = 10,
 ) -> list[dict]:
     """
