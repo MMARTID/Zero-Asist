@@ -5,8 +5,10 @@ from app.models.document import DocumentoNormalizado, DocumentType, ExtractedDat
 from app.services.gemini_client import extract_from_file
 from app.ingestion.normalizer import normalize_document
 from app.services.firestore_client import db, guardar_si_no_existe
+from app.collectors.gmail_poller import poll_gmail
 
 app = FastAPI()
+
 
 @app.post("/procesar-documento")
 async def procesar_documento(file: UploadFile = File(...)):
@@ -46,6 +48,7 @@ async def procesar_documento(file: UploadFile = File(...)):
     doc_ref = db.collection("documentos").document(doc_hash)
     if doc_ref.get().exists:
         raise HTTPException(status_code=409, detail="Documento duplicado")
+
     try:
         # Llamamos a Gemini SOLO una vez → devuelve { document_type, data }
         raw_extracted = extract_from_file(contenido, mime_type)
@@ -77,7 +80,7 @@ async def procesar_documento(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en extracción: {str(e)}")
 
-    doc_id = doc_hash  # Usamos el hash como ID del documento
+    doc_id = doc_hash
     now = datetime.utcnow()
 
     # Convertir fechas date → datetime para Firestore
@@ -85,7 +88,7 @@ async def procesar_documento(file: UploadFile = File(...)):
     for field in ["issue_date", "due_date", "period_start", "period_end"]:
         if normalized_dict.get(field):
             val = normalized_dict[field]
-            if hasattr(val, 'year'):  # es un objeto date
+            if hasattr(val, 'year'):
                 normalized_dict[field] = datetime.combine(val, datetime.min.time())
 
     documento = DocumentoNormalizado(
@@ -121,3 +124,9 @@ async def procesar_documento(file: UploadFile = File(...)):
         "document_type": document_type.value,
         "normalized_data": normalized_dict
     }
+
+
+@app.post("/poll-gmail")
+def poll_gmail_endpoint():
+    processed = poll_gmail()
+    return {"procesados": len(processed), "documentos": processed}
