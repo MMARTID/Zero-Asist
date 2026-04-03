@@ -13,4 +13,4 @@ venv/
 
 app/collectors/token.json
 app/collectors/credentials.json
-tet.py.DS_Store
+.DS_Store
