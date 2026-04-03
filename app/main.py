@@ -6,15 +6,12 @@ from app.services.gemini_client import extract_from_file
 from app.ingestion.normalizer import normalize_document
 from app.services.firestore_client import db, guardar_si_no_existe
 from app.collectors.gmail_poller import poll_gmail
-from app.collectors.gmail_service import get_gmail_service   # <-- añadir esta línea
 
 app = FastAPI()
 
 
 @app.post("/procesar-documento")
 async def procesar_documento(file: UploadFile = File(...)):
-    service = get_gmail_service()
-    print(service.users().getProfile(userId='me').execute())
     contenido = await file.read()
     if not contenido:
         raise HTTPException(status_code=400, detail="Archivo vacío")

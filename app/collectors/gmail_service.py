@@ -33,7 +33,3 @@ def _load_or_refresh_creds() -> Credentials:
 def get_gmail_service() -> Resource:
     creds = _load_or_refresh_creds()
     return build("gmail", "v1", credentials=creds)
-service = get_gmail_service()
-# Lista los últimos 5 mensajes SIN filtros
-results = service.users().messages().list(userId='me', maxResults=5).execute()
-print(results.get('messages', []))
