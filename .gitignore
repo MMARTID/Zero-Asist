@@ -14,4 +14,3 @@ venv/
 app/collectors/token.json
 app/collectors/credentials.json
 .DS_Store
-*.DS_Store
