@@ -8,7 +8,12 @@ from app.collectors.gmail_reader import (
 )
 from app.services.gemini_client import extract_from_file
 from app.ingestion.normalizer import normalize_document
-from app.services.firestore_client import db, guardar_si_no_existe
+from app.services.firestore_client import (
+    db,
+    guardar_si_no_existe,
+    is_message_processed,
+    mark_message_processed,
+)
 import hashlib
 
 logger = logging.getLogger(__name__)
@@ -49,6 +54,13 @@ def poll_gmail(
         subject = msg["subject"]
         snippet = msg["snippet"]
         msg_id = msg["id"]
+        thread_id = msg.get("thread_id", "")
+        from_addr = msg.get("from", "")
+
+        # Skip — mensaje ya procesado en una ejecución anterior
+        if is_message_processed(msg_id):
+            logger.debug(f"⏭️  Ya procesado, ignorando: '{subject}'")
+            continue
 
         # Capa 2 — heurística local
         if not is_invoice_candidate(subject, snippet):
@@ -58,6 +70,10 @@ def poll_gmail(
                 "subject": subject,
                 "reason": "heuristica",
             })
+            mark_message_processed(
+                msg_id, "discarded", subject,
+                reason="heuristica", thread_id=thread_id, from_addr=from_addr,
+            )
             continue
 
         attachments = get_attachments(service, msg_id)
@@ -68,9 +84,20 @@ def poll_gmail(
                 "subject": subject,
                 "reason": "sin_adjuntos",
             })
+            mark_message_processed(
+                msg_id, "discarded", subject,
+                reason="sin_adjuntos", thread_id=thread_id, from_addr=from_addr,
+            )
             continue
 
         logger.info(f"📎 {len(attachments)} adjunto/s encontrado/s en: '{subject}'")
+
+        # Acumuladores por mensaje (un mark_message_processed al final)
+        msg_hashes: list = []
+        msg_has_processed = False
+        msg_has_duplicate = False
+        msg_has_error = False
+        msg_error_reason: str | None = None
 
         for attachment in attachments:
             filename = attachment["filename"]
@@ -91,6 +118,8 @@ def poll_gmail(
                         "gmail_message_id": msg_id,
                         "gmail_subject": subject,
                     })
+                    msg_hashes.append(doc_hash)
+                    msg_has_duplicate = True
                     continue
             except Exception as e:
                 logger.error(f"❌ Error comprobando duplicado para {filename}: {e}")
@@ -100,6 +129,8 @@ def poll_gmail(
                     "gmail_message_id": msg_id,
                     "reason": f"error_check_duplicado: {str(e)}",
                 })
+                msg_has_error = True
+                msg_error_reason = f"error_check_duplicado: {str(e)}"
                 continue
 
             try:
@@ -133,7 +164,7 @@ def poll_gmail(
                         "source": "gmail",
                         "gmail_message_id": msg_id,
                         "gmail_subject": subject,
-                        "gmail_from": msg["from"],
+                        "gmail_from": from_addr,
                         "created_at": datetime.utcnow(),
                     },
                 )
@@ -145,6 +176,8 @@ def poll_gmail(
                     "document_type": document_type_str,
                     "normalized_data": normalized_dict,
                 })
+                msg_hashes.append(doc_hash)
+                msg_has_processed = True
 
             except ValueError:
                 logger.warning(f"🔁 Duplicado en transacción: {filename}")
@@ -154,6 +187,8 @@ def poll_gmail(
                     "gmail_message_id": msg_id,
                     "reason": "duplicado_transaccion",
                 })
+                msg_hashes.append(doc_hash)
+                msg_has_duplicate = True
             except Exception as e:
                 logger.error(f"❌ Error procesando {filename}: {e}")
                 summary["errores"].append({
@@ -162,6 +197,24 @@ def poll_gmail(
                     "gmail_message_id": msg_id,
                     "reason": str(e),
                 })
+                msg_has_error = True
+                msg_error_reason = str(e)
+
+        # Determinar status global del mensaje y registrar en historial
+        if msg_has_processed:
+            final_status = "processed"
+        elif msg_has_error:
+            final_status = "error"
+        else:
+            final_status = "duplicate"
+
+        mark_message_processed(
+            msg_id, final_status, subject,
+            reason=msg_error_reason,
+            document_hashes=msg_hashes,
+            thread_id=thread_id,
+            from_addr=from_addr,
+        )
 
     logger.info(
         f"✅ Resumen: {len(summary['procesados'])} procesados | "

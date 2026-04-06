@@ -63,6 +63,7 @@ def list_candidate_messages(
 
         candidates.append({
             "id": msg["id"],
+            "thread_id": msg.get("threadId", ""),
             "snippet": detail.get("snippet", ""),
             "subject": headers.get("Subject", ""),
             "from": headers.get("From", ""),
