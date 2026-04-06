@@ -1,13 +1,59 @@
 import hashlib
+import logging
+import os
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
 from app.models.document import DocumentoNormalizado, DocumentType, ExtractedData
 from app.services.gemini_client import extract_from_file
 from app.ingestion.normalizer import normalize_document
 from app.services.firestore_client import db, guardar_si_no_existe
 from app.collectors.gmail_poller import poll_gmail
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI()
+
+_DEV_TOKEN = os.environ.get("SCHEDULER_DEV_TOKEN")
+_OIDC_AUDIENCE = os.environ.get("SCHEDULER_AUDIENCE")
+
+
+def verify_scheduler_token(request: Request) -> None:
+    """Dependencia FastAPI que autentica llamadas desde Cloud Scheduler.
+
+    Flujo:
+    1. Si X-Scheduler-Token coincide con SCHEDULER_DEV_TOKEN → permitido (dev local).
+    2. Si Authorization: Bearer <token> → valida OIDC con google-auth (producción).
+    3. Cualquier otro caso → 401.
+    """
+    # --- Alternativa de desarrollo local ---
+    dev_token_header = request.headers.get("X-Scheduler-Token")
+    if dev_token_header:
+        if _DEV_TOKEN and dev_token_header == _DEV_TOKEN:
+            return
+        # Header presente pero token incorrecto o SCHEDULER_DEV_TOKEN no configurado
+        raise HTTPException(status_code=401, detail="X-Scheduler-Token inválido")
+
+    # --- OIDC (Cloud Scheduler en producción) ---
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+
+    if not _OIDC_AUDIENCE:
+        logger.error("SCHEDULER_AUDIENCE no configurado; rechazando token OIDC")
+        raise HTTPException(status_code=401, detail="Servicio no configurado para OIDC")
+
+    token = auth_header.removeprefix("Bearer ").strip()
+    try:
+        id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            audience=_OIDC_AUDIENCE,
+        )
+    except Exception as exc:
+        logger.warning("Token OIDC inválido: %s", exc)
+        raise HTTPException(status_code=401, detail="Token inválido o expirado")
 
 
 @app.post("/procesar-documento")
@@ -127,7 +173,7 @@ async def procesar_documento(file: UploadFile = File(...)):
 
 
 @app.post("/poll-gmail")
-def poll_gmail_endpoint():
+def poll_gmail_endpoint(_: None = Depends(verify_scheduler_token)):
     summary = poll_gmail()
     return {
         "procesados": len(summary["procesados"]),
