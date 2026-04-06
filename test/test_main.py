@@ -1,7 +1,6 @@
 # tests/test_main.py
 
 import pytest
-from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 from app.main import app, verify_scheduler_token
 
@@ -14,44 +13,42 @@ client = TestClient(app)
 
 @pytest.fixture
 def fake_db(monkeypatch):
-    """Firestore db con snapshot.exists=False (documento nuevo)."""
-    fake_snapshot = MagicMock()
-    fake_snapshot.exists = False
-    fake_doc_ref = MagicMock()
-    fake_doc_ref.get.return_value = fake_snapshot
-    fake_collection = MagicMock()
-    fake_collection.document.return_value = fake_doc_ref
-    db = MagicMock()
-    db.collection.return_value = fake_collection
-    db.transaction.return_value = MagicMock()
-    monkeypatch.setattr("app.main.db", db)
-    return db
+    """Stub is_document_duplicate to return False (documento nuevo)."""
+    monkeypatch.setattr("app.main.is_document_duplicate", lambda _: False)
 
 
 @pytest.fixture
 def fake_extract(monkeypatch):
-    """Gemini que devuelve una factura recibida estándar."""
+    """Stub extract_and_normalize to return a standard received invoice."""
     def _extract(file_bytes, mime_type):
-        return {
-            "document_type": "invoice_received",
-            "data": {
-                "issuer_name": "Empresa Test",
-                "issue_date": "2024-01-01",
-                "base_amount": 100,
-                "tax_amount": 21,
-                "total_amount": 121,
-                "currency": "EUR",
-                "tax_breakdown": [],
-                "line_items": [],
-            },
+        normalized = {
+            "issuer_name": "Empresa Test",
+            "issue_date": None,
+            "base_amount": 100.0,
+            "tax_amount": 21.0,
+            "total_amount": 121.0,
+            "currency": "EUR",
+            "tax_breakdown": [],
+            "line_items": [],
         }
-    monkeypatch.setattr("app.main.extract_from_file", _extract)
+        extracted_data = {
+            "issuer_name": "Empresa Test",
+            "issue_date": "2024-01-01",
+            "base_amount": 100,
+            "tax_amount": 21,
+            "total_amount": 121,
+            "currency": "EUR",
+            "tax_breakdown": [],
+            "line_items": [],
+        }
+        return "invoice_received", normalized, extracted_data
+    monkeypatch.setattr("app.main.extract_and_normalize", _extract)
     return _extract
 
 
 @pytest.fixture
 def fake_guardar(monkeypatch):
-    monkeypatch.setattr("app.main.guardar_si_no_existe", lambda *a, **kw: None)
+    monkeypatch.setattr("app.main.save_document", lambda **kw: None)
 
 
 # ---------------------------------------------------------------------------
@@ -82,8 +79,8 @@ def test_procesar_documento_mime_detectado_por_extension(monkeypatch, fake_db, f
 def test_procesar_documento_document_type_unknown_to_other(monkeypatch, fake_db, fake_guardar):
     """Si Gemini devuelve un tipo desconocido, se mapea a 'other'."""
     monkeypatch.setattr(
-        "app.main.extract_from_file",
-        lambda *a, **kw: {"document_type": "tipo_inventado", "data": {}},
+        "app.main.extract_and_normalize",
+        lambda *a, **kw: ("tipo_inventado", {}, {}),
     )
     response = client.post(
         "/procesar-documento",
@@ -126,13 +123,7 @@ def test_procesar_documento_extension_desconocida():
 
 def test_procesar_documento_duplicado_precheck(monkeypatch):
     """El documento ya existe en Firestore (pre-check) → 409."""
-    fake_snapshot = MagicMock()
-    fake_snapshot.exists = True
-    fake_doc_ref = MagicMock()
-    fake_doc_ref.get.return_value = fake_snapshot
-    fake_db = MagicMock()
-    fake_db.collection.return_value.document.return_value = fake_doc_ref
-    monkeypatch.setattr("app.main.db", fake_db)
+    monkeypatch.setattr("app.main.is_document_duplicate", lambda _: True)
 
     response = client.post(
         "/procesar-documento",
@@ -143,11 +134,11 @@ def test_procesar_documento_duplicado_precheck(monkeypatch):
 
 
 def test_procesar_documento_duplicado_transaccion(monkeypatch, fake_db, fake_extract):
-    """guardar_si_no_existe lanza ValueError (race condition) → 409."""
-    def _raise(*a, **kw):
+    """save_document lanza ValueError (race condition) → 409."""
+    def _raise(**kw):
         raise ValueError("Documento duplicado")
 
-    monkeypatch.setattr("app.main.guardar_si_no_existe", _raise)
+    monkeypatch.setattr("app.main.save_document", _raise)
     response = client.post(
         "/procesar-documento",
         files={"file": ("dup2.pdf", b"fake content", "application/pdf")},
@@ -156,9 +147,9 @@ def test_procesar_documento_duplicado_transaccion(monkeypatch, fake_db, fake_ext
 
 
 def test_procesar_documento_gemini_error(monkeypatch, fake_db):
-    """Si Gemini falla → 500."""
+    """Si la extracción falla → 500."""
     monkeypatch.setattr(
-        "app.main.extract_from_file",
+        "app.main.extract_and_normalize",
         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("Gemini down")),
     )
     response = client.post(

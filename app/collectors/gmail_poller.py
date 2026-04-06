@@ -1,20 +1,20 @@
 import logging
-from datetime import datetime
 from app.collectors.gmail_service import get_gmail_service
 from app.collectors.gmail_reader import (
     list_candidate_messages,
     is_invoice_candidate,
     get_attachments,
 )
-from app.services.gemini_client import extract_from_file
-from app.ingestion.normalizer import normalize_document
+from app.services.document_processor import (
+    compute_hash,
+    extract_and_normalize,
+    is_document_duplicate,
+    save_document,
+)
 from app.services.firestore_client import (
-    db,
-    guardar_si_no_existe,
     is_message_processed,
     mark_message_processed,
 )
-import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -104,13 +104,12 @@ def poll_gmail(
             mime_type = attachment["mime_type"]
             data = attachment["data"]
 
-            doc_hash = hashlib.sha256(data).hexdigest()
+            doc_hash = compute_hash(data)
             logger.debug(f"🔍 Revisando adjunto: {filename} | hash={doc_hash}")
 
             # Evitar reprocesar documentos ya guardados
             try:
-                doc_ref = db.collection("documentos").document(doc_hash)
-                if doc_ref.get().exists:
+                if is_document_duplicate(doc_hash):
                     logger.info(f"🔁 Duplicado, ignorado: {filename}")
                     summary["duplicados"].append({
                         "file_name": filename,
@@ -136,36 +135,20 @@ def poll_gmail(
             try:
                 # Capa 3 — Gemini solo si pasa todo lo anterior
                 logger.debug(f"🤖 Enviando a Gemini: {filename}")
-                raw_extracted = extract_from_file(data, mime_type)
-                document_type_str = raw_extracted.get("document_type", "other")
-                extracted_data = raw_extracted.get("data", {})
+                document_type_str, normalized_dict, extracted_data = extract_and_normalize(data, mime_type)
 
-                normalized = normalize_document(extracted_data, document_type_str)
-
-                # Convertir fechas date → datetime para Firestore
-                normalized_dict = dict(normalized)
-                for field in ["issue_date", "due_date", "period_start", "period_end"]:
-                    val = normalized_dict.get(field)
-                    if val and hasattr(val, "year"):
-                        normalized_dict[field] = datetime.combine(val, datetime.min.time())
-
-                transaction = db.transaction()
-                guardar_si_no_existe(
-                    transaction,
-                    "documentos",
-                    doc_hash,
-                    {
-                        "document_hash": doc_hash,
-                        "file_name": filename,
-                        "file_size": len(data),
-                        "document_type": document_type_str,
-                        "normalized_data": normalized_dict,
-                        "extracted_data": extracted_data,
+                save_document(
+                    doc_hash=doc_hash,
+                    filename=filename,
+                    file_size=len(data),
+                    document_type_str=document_type_str,
+                    normalized_dict=normalized_dict,
+                    extracted_data=extracted_data,
+                    extra={
                         "source": "gmail",
                         "gmail_message_id": msg_id,
                         "gmail_subject": subject,
                         "gmail_from": from_addr,
-                        "created_at": datetime.utcnow(),
                     },
                 )
 
