@@ -1,6 +1,5 @@
 # tests/test_gmail_poller.py
 
-import hashlib
 import pytest
 from unittest.mock import MagicMock, call, patch
 from app.collectors.gmail_poller import poll_gmail
@@ -47,32 +46,26 @@ def base_mocks(monkeypatch):
         lambda *a, **kw: [_make_attachment()],
     )
 
-    # Gemini
+    # Duplicate check (no duplicate by default)
     monkeypatch.setattr(
-        "app.collectors.gmail_poller.extract_from_file",
-        lambda *a, **kw: {"document_type": "invoice_received", "data": {"issuer_name": "Proveedor"}},
+        "app.collectors.gmail_poller.is_document_duplicate",
+        lambda doc_hash: False,
     )
-    # Normalizer
+    mocks.is_dup = False
+
+    # extract_and_normalize
     monkeypatch.setattr(
-        "app.collectors.gmail_poller.normalize_document",
-        lambda data, dtype: data,
+        "app.collectors.gmail_poller.extract_and_normalize",
+        lambda data, mime_type: (
+            "invoice_received",
+            {"issuer_name": "Proveedor"},
+            {"issuer_name": "Proveedor"},
+        ),
     )
 
-    # Firestore db
-    fake_snapshot = MagicMock()
-    fake_snapshot.exists = False
-    fake_doc_ref = MagicMock()
-    fake_doc_ref.get.return_value = fake_snapshot
-    fake_db = MagicMock()
-    fake_db.collection.return_value.document.return_value = fake_doc_ref
-    fake_db.transaction.return_value = MagicMock()
-    monkeypatch.setattr("app.collectors.gmail_poller.db", fake_db)
-    mocks.db = fake_db
-    mocks.doc_ref = fake_doc_ref
-    mocks.snapshot = fake_snapshot
-
-    # guardar_si_no_existe
-    monkeypatch.setattr("app.collectors.gmail_poller.guardar_si_no_existe", lambda *a, **kw: None)
+    # save_document (no-op by default)
+    mocks.save = MagicMock()
+    monkeypatch.setattr("app.collectors.gmail_poller.save_document", mocks.save)
 
     # historial
     monkeypatch.setattr("app.collectors.gmail_poller.is_message_processed", lambda *a, **kw: False)
@@ -169,9 +162,12 @@ def test_poll_gmail_descartado_sin_adjuntos(monkeypatch):
     assert mark.call_args.kwargs.get("reason") == "sin_adjuntos"
 
 
-def test_poll_gmail_adjunto_duplicado_por_hash(base_mocks):
+def test_poll_gmail_adjunto_duplicado_por_hash(base_mocks, monkeypatch):
     """Adjunto cuyo hash ya existe en Firestore → contado como duplicado."""
-    base_mocks.snapshot.exists = True  # doc ya existe
+    monkeypatch.setattr(
+        "app.collectors.gmail_poller.is_document_duplicate",
+        lambda doc_hash: True,
+    )
 
     summary = poll_gmail()
 
@@ -183,9 +179,9 @@ def test_poll_gmail_adjunto_duplicado_por_hash(base_mocks):
 
 
 def test_poll_gmail_error_en_gemini(base_mocks, monkeypatch):
-    """Error en Gemini → adjunto en errores, mensaje marcado como 'error'."""
+    """Error en extracción → adjunto en errores, mensaje marcado como 'error'."""
     monkeypatch.setattr(
-        "app.collectors.gmail_poller.extract_from_file",
+        "app.collectors.gmail_poller.extract_and_normalize",
         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("Gemini timeout")),
     )
 
@@ -198,7 +194,10 @@ def test_poll_gmail_error_en_gemini(base_mocks, monkeypatch):
 
 def test_poll_gmail_error_check_duplicado(base_mocks, monkeypatch):
     """Error al consultar Firestore para check duplicado → error en summary."""
-    base_mocks.doc_ref.get.side_effect = Exception("Firestore unavailable")
+    def _raise(doc_hash):
+        raise Exception("Firestore unavailable")
+
+    monkeypatch.setattr("app.collectors.gmail_poller.is_document_duplicate", _raise)
 
     summary = poll_gmail()
 
@@ -220,23 +219,14 @@ def test_poll_gmail_multiples_adjuntos_uno_procesado_uno_duplicado(base_mocks, m
 
     monkeypatch.setattr("app.collectors.gmail_poller.get_attachments", fake_attachments)
 
-    # El primer adjunto no existe, el segundo sí
+    import hashlib
     hash_new = hashlib.sha256(content_new).hexdigest()
     hash_dup = hashlib.sha256(content_dup).hexdigest()
 
-    def fake_doc_get(self=None):
-        # Acceder al hash desde el document mock es difícil; usamos call count
-        return MagicMock(exists=False)
+    def fake_is_dup(doc_hash):
+        return doc_hash == hash_dup
 
-    call_count = {"n": 0}
-
-    def fake_exists_check():
-        call_count["n"] += 1
-        snap = MagicMock()
-        snap.exists = call_count["n"] > 1  # segundo adjunto es duplicado
-        return snap
-
-    base_mocks.doc_ref.get.side_effect = lambda: fake_exists_check()
+    monkeypatch.setattr("app.collectors.gmail_poller.is_document_duplicate", fake_is_dup)
 
     summary = poll_gmail()
 
@@ -247,11 +237,11 @@ def test_poll_gmail_multiples_adjuntos_uno_procesado_uno_duplicado(base_mocks, m
 
 
 def test_poll_gmail_duplicado_en_transaccion(base_mocks, monkeypatch):
-    """guardar_si_no_existe lanza ValueError (race condition) → duplicado."""
-    def _raise(*a, **kw):
+    """save_document lanza ValueError (race condition) → duplicado."""
+    def _raise(**kw):
         raise ValueError("Documento duplicado")
 
-    monkeypatch.setattr("app.collectors.gmail_poller.guardar_si_no_existe", _raise)
+    monkeypatch.setattr("app.collectors.gmail_poller.save_document", _raise)
 
     summary = poll_gmail()
 

@@ -169,3 +169,64 @@ def test_normalize_document_campos_nulos():
     assert result["issue_date"] is None
     assert result["total_amount"] is None
     assert result["currency"] == "EUR"
+
+
+# ---------------------------------------------------------------------------
+# dates_to_firestore
+# ---------------------------------------------------------------------------
+
+from datetime import datetime
+from app.ingestion.normalizer import dates_to_firestore
+
+
+def test_dates_to_firestore_converts_date_fields():
+    """date objects in known fields are converted to datetime."""
+    normalized = {
+        "issuer_name": "SL",
+        "issue_date": date(2024, 3, 15),
+        "due_date": date(2024, 4, 1),
+        "period_start": None,
+        "period_end": None,
+        "total_amount": 100.0,
+    }
+    result = dates_to_firestore(normalized)
+
+    assert isinstance(result["issue_date"], datetime)
+    assert result["issue_date"] == datetime(2024, 3, 15, 0, 0, 0)
+    assert isinstance(result["due_date"], datetime)
+    assert result["due_date"] == datetime(2024, 4, 1, 0, 0, 0)
+    # None fields are left as None
+    assert result["period_start"] is None
+    assert result["period_end"] is None
+    # Non-date fields are untouched
+    assert result["issuer_name"] == "SL"
+    assert result["total_amount"] == 100.0
+
+
+def test_dates_to_firestore_normalizes_datetime_to_midnight():
+    """datetime objects are normalized to midnight datetime (Firestore consistency)."""
+    dt = datetime(2024, 6, 1, 12, 0, 0)
+    result = dates_to_firestore({"issue_date": dt})
+    # datetime is a subclass of date, so it is also normalized to midnight
+    assert result["issue_date"] == datetime(2024, 6, 1, 0, 0, 0)
+
+
+def test_dates_to_firestore_does_not_mutate_original():
+    """The original dict is not modified."""
+    original = {"issue_date": date(2024, 1, 1)}
+    dates_to_firestore(original)
+    assert isinstance(original["issue_date"], date)
+    assert not isinstance(original["issue_date"], datetime)
+
+
+def test_dates_to_firestore_ignores_unknown_fields():
+    """Fields not in DATE_FIELDS are not converted."""
+    data = {"custom_date": date(2024, 1, 1), "amount": 50.0}
+    result = dates_to_firestore(data)
+    # custom_date is not a known date field and should remain a date
+    assert isinstance(result["custom_date"], date)
+    assert result["amount"] == 50.0
+
+
+def test_dates_to_firestore_empty_dict():
+    assert dates_to_firestore({}) == {}
