@@ -15,6 +15,13 @@ SYSTEM_INSTRUCTION = (
     "social_security_form, delivery_note, contract, tax_authority_communication, other. "
     "El campo 'data' debe contener los campos extraídos del documento según su tipo. "
     "Si un campo no está presente en el documento, devuelve null. "
+    "Para facturas (invoice_received / invoice_issued), extrae también los siguientes campos fiscales españoles: "
+    "'is_national' (boolean): true si la operación es nacional (proveedor y receptor en España), false si es extranjera. "
+    "'inversion_sujeto_pasivo' (boolean): true si aplica inversión del sujeto pasivo (el receptor es quien liquida el IVA). "
+    "'pasivo_intracomunitario' (boolean): true si es una adquisición intracomunitaria de bienes o servicios (proveedor en otro estado miembro de la UE). "
+    "'importacion_exento' (boolean): true si la factura corresponde a una importación exenta de IVA. "
+    "'recargo_equivalencia' (número): importe total del recargo de equivalencia si aparece en la factura, null en caso contrario. "
+    "'bienes_inversion' (boolean): true si la factura incluye bienes de inversión (activos fijos sujetos a prorrata especial de IVA). "
     "Responde únicamente con el JSON estructurado, sin texto adicional."
 )
 

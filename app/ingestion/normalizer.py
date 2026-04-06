@@ -85,7 +85,13 @@ def normalize_invoice_received(raw: Dict[str, Any]) -> Dict[str, Any]:
         "currency": raw.get("currency", "EUR") or "EUR",
         "payment_method": raw.get("payment_method") or None,
         "tax_breakdown": normalize_tax_breakdown(raw.get("tax_breakdown")),
-        "line_items": normalize_line_items(raw.get("line_items"))
+        "line_items": normalize_line_items(raw.get("line_items")),
+        "is_national": raw.get("is_national"),
+        "inversion_sujeto_pasivo": raw.get("inversion_sujeto_pasivo"),
+        "pasivo_intracomunitario": raw.get("pasivo_intracomunitario"),
+        "importacion_exento": raw.get("importacion_exento"),
+        "recargo_equivalencia": normalize_number(raw.get("recargo_equivalencia")),
+        "bienes_inversion": raw.get("bienes_inversion"),
     }
 
 def normalize_invoice_issued(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -105,7 +111,13 @@ def normalize_invoice_issued(raw: Dict[str, Any]) -> Dict[str, Any]:
         "currency": raw.get("currency", "EUR") or "EUR",
         "payment_method": raw.get("payment_method") or None,
         "tax_breakdown": normalize_tax_breakdown(raw.get("tax_breakdown")),
-        "line_items": normalize_line_items(raw.get("line_items"))
+        "line_items": normalize_line_items(raw.get("line_items")),
+        "is_national": raw.get("is_national"),
+        "inversion_sujeto_pasivo": raw.get("inversion_sujeto_pasivo"),
+        "pasivo_intracomunitario": raw.get("pasivo_intracomunitario"),
+        "importacion_exento": raw.get("importacion_exento"),
+        "recargo_equivalencia": normalize_number(raw.get("recargo_equivalencia")),
+        "bienes_inversion": raw.get("bienes_inversion"),
     }
 
 def normalize_bank_transaction(item: Dict[str, Any]) -> Dict[str, Any]:

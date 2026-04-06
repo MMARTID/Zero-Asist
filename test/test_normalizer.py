@@ -80,6 +80,13 @@ def test_normalize_document_invoice_received():
     assert len(result["tax_breakdown"]) == 1
     assert result["tax_breakdown"][0]["rate"] == pytest.approx(21.0)
     assert len(result["line_items"]) == 1
+    # Nuevos campos fiscales: ausentes → None
+    assert result["is_national"] is None
+    assert result["inversion_sujeto_pasivo"] is None
+    assert result["pasivo_intracomunitario"] is None
+    assert result["importacion_exento"] is None
+    assert result["recargo_equivalencia"] is None
+    assert result["bienes_inversion"] is None
 
 
 def test_normalize_document_invoice_issued():
@@ -95,6 +102,52 @@ def test_normalize_document_invoice_issued():
     assert result["issuer_name"] == "Proveedor SL"
     assert result["total_amount"] == pytest.approx(500.0)
     assert result["currency"] == "USD"
+    # Nuevos campos fiscales: ausentes → None
+    assert result["is_national"] is None
+    assert result["recargo_equivalencia"] is None
+    assert result["bienes_inversion"] is None
+
+
+def test_normalize_document_invoice_spanish_fiscal_fields():
+    """Los nuevos campos fiscales son extraídos y normalizados correctamente."""
+    raw = {
+        "issuer_name": "Proveedor UE SL",
+        "total_amount": 1000.0,
+        "is_national": False,
+        "inversion_sujeto_pasivo": True,
+        "pasivo_intracomunitario": True,
+        "importacion_exento": False,
+        "recargo_equivalencia": "52,10",
+        "bienes_inversion": True,
+    }
+    result = normalize_document(raw, "invoice_received")
+
+    assert result["is_national"] is False
+    assert result["inversion_sujeto_pasivo"] is True
+    assert result["pasivo_intracomunitario"] is True
+    assert result["importacion_exento"] is False
+    assert result["recargo_equivalencia"] == pytest.approx(52.10)
+    assert result["bienes_inversion"] is True
+
+
+def test_normalize_document_invoice_issued_spanish_fiscal_fields():
+    """Los nuevos campos fiscales también se normalizan en facturas emitidas."""
+    raw = {
+        "receiver_name": "Cliente Nacional SA",
+        "total_amount": 200.0,
+        "is_national": True,
+        "inversion_sujeto_pasivo": False,
+        "pasivo_intracomunitario": False,
+        "importacion_exento": False,
+        "recargo_equivalencia": None,
+        "bienes_inversion": False,
+    }
+    result = normalize_document(raw, "invoice_issued")
+
+    assert result["is_national"] is True
+    assert result["inversion_sujeto_pasivo"] is False
+    assert result["recargo_equivalencia"] is None
+    assert result["bienes_inversion"] is False
 
 
 def test_normalize_document_bank_statement():

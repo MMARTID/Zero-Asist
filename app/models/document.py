@@ -57,6 +57,12 @@ class InvoiceReceivedData(BaseModel):
     tax_breakdown: List[TaxBreakdownItem] = Field(default_factory=list)
     line_items: List[LineItem] = Field(default_factory=list)
     confidence_score: Optional[float] = None
+    is_national: Optional[bool] = None
+    inversion_sujeto_pasivo: Optional[bool] = None
+    pasivo_intracomunitario: Optional[bool] = None
+    importacion_exento: Optional[bool] = None
+    recargo_equivalencia: Optional[float] = None
+    bienes_inversion: Optional[bool] = None
 
 
 class InvoiceIssuedData(BaseModel):
@@ -76,6 +82,12 @@ class InvoiceIssuedData(BaseModel):
     tax_breakdown: List[TaxBreakdownItem] = Field(default_factory=list)
     line_items: List[LineItem] = Field(default_factory=list)
     confidence_score: Optional[float] = None
+    is_national: Optional[bool] = None
+    inversion_sujeto_pasivo: Optional[bool] = None
+    pasivo_intracomunitario: Optional[bool] = None
+    importacion_exento: Optional[bool] = None
+    recargo_equivalencia: Optional[float] = None
+    bienes_inversion: Optional[bool] = None
 
 
 class BankTransaction(BaseModel):
@@ -123,6 +135,13 @@ class ExtractedPayload(BaseModel):
     tax_breakdown: List[TaxBreakdownItem] = Field(default_factory=list)
     line_items: List[LineItem] = Field(default_factory=list)
     confidence_score: Optional[float] = None
+    # --- Campos fiscales españoles (facturas) ---
+    is_national: Optional[bool] = None
+    inversion_sujeto_pasivo: Optional[bool] = None
+    pasivo_intracomunitario: Optional[bool] = None
+    importacion_exento: Optional[bool] = None
+    recargo_equivalencia: Optional[float] = None
+    bienes_inversion: Optional[bool] = None
     # --- Campos de bank_statement ---
     bank_name: Optional[str] = None
     account_holder: Optional[str] = None
