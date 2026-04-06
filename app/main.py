@@ -128,5 +128,13 @@ async def procesar_documento(file: UploadFile = File(...)):
 
 @app.post("/poll-gmail")
 def poll_gmail_endpoint():
-    processed = poll_gmail()
-    return {"procesados": len(processed), "documentos": processed}
+    summary = poll_gmail()
+    return {
+        "procesados": len(summary["procesados"]),
+        "duplicados": len(summary["duplicados"]),
+        "errores": len(summary["errores"]),
+        "descartados": len(summary["descartados"]),
+        "documentos": summary["procesados"],
+        "detalle_duplicados": summary["duplicados"],
+        "detalle_errores": summary["errores"],
+    }
