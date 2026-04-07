@@ -11,13 +11,33 @@ Centralises the logic that was previously duplicated between the
 """
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Literal, Optional
 
 from app.ingestion.normalizer import dates_to_firestore, normalize_document
 from app.services.firestore_client import db, guardar_si_no_existe
 from app.services.gemini_client import extract_from_file
 
 logger = logging.getLogger(__name__)
+
+ALLOWED_MIME_TYPES = {
+    "application/pdf",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "application/xml",
+    "text/xml",
+}
+
+
+@dataclass
+class ProcessingResult:
+    status: Literal["processed", "duplicate"]
+    doc_hash: str
+    document_type: Optional[str]
+    normalized_data: Optional[dict]
+    extracted_data: Optional[dict]
 
 
 def compute_hash(file_bytes: bytes) -> str:

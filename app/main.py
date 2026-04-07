@@ -5,13 +5,13 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from app.models.document import DocumentType, ExtractedData
 from app.services.document_processor import (
+    ALLOWED_MIME_TYPES,
     compute_hash,
     extract_and_normalize,
     is_document_duplicate,
     save_document,
 )
 from app.collectors.gmail_poller import poll_gmail
-from app.collectors.gmail_reader import ALLOWED_MIME_TYPES
 
 logger = logging.getLogger(__name__)
 

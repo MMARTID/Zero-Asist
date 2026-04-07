@@ -1,6 +1,7 @@
 import base64
 from typing import Optional
 from googleapiclient.discovery import Resource
+from app.services.document_processor import ALLOWED_MIME_TYPES
 
 # ---------------------------------------------------------------------------
 # Palabras clave para la heurística local (Capa 2)
@@ -13,15 +14,6 @@ INVOICE_KEYWORDS = [
     "vencimiento", "due date",
     "pago recibido", "payment received", "cargo", "abono",
 ]
-
-ALLOWED_MIME_TYPES = {
-    "application/pdf",
-    "image/jpeg",
-    "image/jpg",
-    "image/png",
-    "application/xml",
-    "text/xml",
-}
 
 
 # ---------------------------------------------------------------------------
