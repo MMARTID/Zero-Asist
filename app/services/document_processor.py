@@ -116,3 +116,82 @@ def save_document(
     if extra:
         record.update(extra)
     guardar_si_no_existe(transaction, "documentos", doc_hash, record)
+
+
+def process_document(
+    file_bytes: bytes,
+    mime_type: str,
+    filename: str,
+    file_size: int,
+    extra: dict | None = None,
+) -> ProcessingResult:
+    """Orchestrates the full document processing pipeline.
+
+    Steps:
+    1. Validate *mime_type* against :data:`ALLOWED_MIME_TYPES`.
+    2. Compute SHA-256 hash.
+    3. Check for duplicates in Firestore (cheap — no Gemini call).
+    4. Extract and normalise via Gemini.
+    5. Persist to Firestore (transactional).
+
+    Args:
+        file_bytes: Raw bytes of the document.
+        mime_type:  MIME type of the document.
+        filename:   Original file name (stored in Firestore).
+        file_size:  File size in bytes (stored in Firestore).
+        extra:      Optional dict merged into the Firestore record
+                    (e.g. Gmail metadata: ``source``, ``gmail_message_id``).
+
+    Returns:
+        :class:`ProcessingResult` with ``status="processed"`` or ``status="duplicate"``.
+
+    Raises:
+        ValueError: If *mime_type* is not in :data:`ALLOWED_MIME_TYPES`.
+        Exception:  Any error raised by Gemini, the normaliser, or Firestore
+                    (excluding duplicate race conditions, which return ``status="duplicate"``).
+    """
+    if mime_type not in ALLOWED_MIME_TYPES:
+        raise ValueError(f"Tipo de archivo no soportado: {mime_type}")
+
+    doc_hash = compute_hash(file_bytes)
+
+    if is_document_duplicate(doc_hash):
+        logger.debug("Duplicado detectado (pre-Gemini): hash=%s file=%s", doc_hash, filename)
+        return ProcessingResult(
+            status="duplicate",
+            doc_hash=doc_hash,
+            document_type=None,
+            normalized_data=None,
+            extracted_data=None,
+        )
+
+    document_type_str, normalized_dict, extracted_data = extract_and_normalize(file_bytes, mime_type)
+
+    try:
+        save_document(
+            doc_hash=doc_hash,
+            filename=filename,
+            file_size=file_size,
+            document_type_str=document_type_str,
+            normalized_dict=normalized_dict,
+            extracted_data=extracted_data,
+            extra=extra,
+        )
+    except ValueError:
+        # Race condition: otro proceso guardó el mismo hash entre el check y el save.
+        logger.debug("Duplicado detectado (race condition): hash=%s file=%s", doc_hash, filename)
+        return ProcessingResult(
+            status="duplicate",
+            doc_hash=doc_hash,
+            document_type=None,
+            normalized_data=None,
+            extracted_data=None,
+        )
+
+    return ProcessingResult(
+        status="processed",
+        doc_hash=doc_hash,
+        document_type=document_type_str,
+        normalized_data=normalized_dict,
+        extracted_data=extracted_data,
+    )

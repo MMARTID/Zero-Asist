@@ -5,12 +5,7 @@ from app.collectors.gmail_reader import (
     is_invoice_candidate,
     get_attachments,
 )
-from app.services.document_processor import (
-    compute_hash,
-    extract_and_normalize,
-    is_document_duplicate,
-    save_document,
-)
+from app.services.document_processor import process_document
 from app.services.firestore_client import (
     is_message_processed,
     mark_message_processed,
@@ -57,12 +52,10 @@ def poll_gmail(
         thread_id = msg.get("thread_id", "")
         from_addr = msg.get("from", "")
 
-        # Skip — mensaje ya procesado en una ejecución anterior
         if is_message_processed(msg_id):
             logger.debug(f"⏭️  Ya procesado, ignorando: '{subject}'")
             continue
 
-        # Capa 2 — heurística local
         if not is_invoice_candidate(subject, snippet):
             logger.debug(f"⏭️  Descartado por heurística: '{subject}'")
             summary["descartados"].append({
@@ -92,7 +85,6 @@ def poll_gmail(
 
         logger.info(f"📎 {len(attachments)} adjunto/s encontrado/s en: '{subject}'")
 
-        # Acumuladores por mensaje (un mark_message_processed al final)
         msg_hashes: list = []
         msg_has_processed = False
         msg_has_duplicate = False
@@ -104,46 +96,12 @@ def poll_gmail(
             mime_type = attachment["mime_type"]
             data = attachment["data"]
 
-            doc_hash = compute_hash(data)
-            logger.debug(f"🔍 Revisando adjunto: {filename} | hash={doc_hash}")
-
-            # Evitar reprocesar documentos ya guardados
             try:
-                if is_document_duplicate(doc_hash):
-                    logger.info(f"🔁 Duplicado, ignorado: {filename}")
-                    summary["duplicados"].append({
-                        "file_name": filename,
-                        "document_hash": doc_hash,
-                        "gmail_message_id": msg_id,
-                        "gmail_subject": subject,
-                    })
-                    msg_hashes.append(doc_hash)
-                    msg_has_duplicate = True
-                    continue
-            except Exception as e:
-                logger.error(f"❌ Error comprobando duplicado para {filename}: {e}")
-                summary["errores"].append({
-                    "file_name": filename,
-                    "document_hash": doc_hash,
-                    "gmail_message_id": msg_id,
-                    "reason": f"error_check_duplicado: {str(e)}",
-                })
-                msg_has_error = True
-                msg_error_reason = f"error_check_duplicado: {str(e)}"
-                continue
-
-            try:
-                # Capa 3 — Gemini solo si pasa todo lo anterior
-                logger.debug(f"🤖 Enviando a Gemini: {filename}")
-                document_type_str, normalized_dict, extracted_data = extract_and_normalize(data, mime_type)
-
-                save_document(
-                    doc_hash=doc_hash,
+                result = process_document(
+                    file_bytes=data,
+                    mime_type=mime_type,
                     filename=filename,
                     file_size=len(data),
-                    document_type_str=document_type_str,
-                    normalized_dict=normalized_dict,
-                    extracted_data=extracted_data,
                     extra={
                         "source": "gmail",
                         "gmail_message_id": msg_id,
@@ -151,39 +109,38 @@ def poll_gmail(
                         "gmail_from": from_addr,
                     },
                 )
-
-                logger.info(f"✅ Guardado: {filename} ({document_type_str})")
-                summary["procesados"].append({
-                    "document_hash": doc_hash,
-                    "file_name": filename,
-                    "document_type": document_type_str,
-                    "normalized_data": normalized_dict,
-                })
-                msg_hashes.append(doc_hash)
-                msg_has_processed = True
-
-            except ValueError:
-                logger.warning(f"🔁 Duplicado en transacción: {filename}")
-                summary["duplicados"].append({
-                    "file_name": filename,
-                    "document_hash": doc_hash,
-                    "gmail_message_id": msg_id,
-                    "reason": "duplicado_transaccion",
-                })
-                msg_hashes.append(doc_hash)
-                msg_has_duplicate = True
             except Exception as e:
                 logger.error(f"❌ Error procesando {filename}: {e}")
                 summary["errores"].append({
                     "file_name": filename,
-                    "document_hash": doc_hash,
                     "gmail_message_id": msg_id,
                     "reason": str(e),
                 })
                 msg_has_error = True
                 msg_error_reason = str(e)
+                continue
 
-        # Determinar status global del mensaje y registrar en historial
+            if result.status == "duplicate":
+                logger.info(f"🔁 Duplicado, ignorado: {filename}")
+                summary["duplicados"].append({
+                    "file_name": filename,
+                    "document_hash": result.doc_hash,
+                    "gmail_message_id": msg_id,
+                    "gmail_subject": subject,
+                })
+                msg_hashes.append(result.doc_hash)
+                msg_has_duplicate = True
+            else:
+                logger.info(f"✅ Guardado: {filename} ({result.document_type})")
+                summary["procesados"].append({
+                    "document_hash": result.doc_hash,
+                    "file_name": filename,
+                    "document_type": result.document_type,
+                    "normalized_data": result.normalized_data,
+                })
+                msg_hashes.append(result.doc_hash)
+                msg_has_processed = True
+
         if msg_has_processed:
             final_status = "processed"
         elif msg_has_error:

@@ -11,8 +11,11 @@ from app.services.document_processor import (
     compute_hash,
     extract_and_normalize,
     is_document_duplicate,
+    process_document,
+    ProcessingResult,
     save_document,
 )
+
 
 
 # ---------------------------------------------------------------------------
@@ -211,3 +214,117 @@ def test_save_document_propagates_duplicate_error(monkeypatch):
             normalized_dict={},
             extracted_data={},
         )
+# ---------------------------------------------------------------------------
+# process_document
+# ---------------------------------------------------------------------------
+
+
+def _patch_pipeline(monkeypatch, *, is_duplicate=False, gemini_raises=None, save_raises=None):
+    """Helper que parchea las 3 dependencias de process_document."""
+    fake_snap = MagicMock()
+    fake_snap.exists = is_duplicate
+    fake_db = MagicMock()
+    fake_db.collection.return_value.document.return_value.get.return_value = fake_snap
+    fake_db.transaction.return_value = MagicMock()
+    monkeypatch.setattr(document_processor, "db", fake_db)
+
+    if gemini_raises:
+        monkeypatch.setattr(document_processor, "extract_from_file", MagicMock(side_effect=gemini_raises))
+    else:
+        monkeypatch.setattr(document_processor, "extract_from_file", MagicMock(return_value={
+            "document_type": "invoice_received",
+            "data": {"issuer_name": "Empresa SL", "total_amount": 121.0},
+        }))
+
+    if save_raises:
+        monkeypatch.setattr(document_processor, "guardar_si_no_existe", MagicMock(side_effect=save_raises))
+    else:
+        monkeypatch.setattr(document_processor, "guardar_si_no_existe", MagicMock())
+
+
+def test_process_document_invalid_mime_raises_value_error(monkeypatch):
+    """MIME no soportado → ValueError antes de tocar Firestore o Gemini."""
+    fake_db = MagicMock()
+    monkeypatch.setattr(document_processor, "db", fake_db)
+
+    with pytest.raises(ValueError, match="no soportado"):
+        process_document(b"data", "application/zip", "file.zip", 4)
+
+    fake_db.collection.assert_not_called()
+
+
+def test_process_document_returns_duplicate_on_existing_hash(monkeypatch):
+    """Documento ya existe → status=duplicate sin llamar a Gemini."""
+    extract_mock = MagicMock()
+    _patch_pipeline(monkeypatch, is_duplicate=True)
+    monkeypatch.setattr(document_processor, "extract_from_file", extract_mock)
+
+    result = process_document(b"pdf bytes", "application/pdf", "factura.pdf", 9)
+
+    assert result.status == "duplicate"
+    assert result.doc_hash == hashlib.sha256(b"pdf bytes").hexdigest()
+    assert result.document_type is None
+    assert result.normalized_data is None
+    extract_mock.assert_not_called()
+
+
+def test_process_document_happy_path(monkeypatch):
+    """Flujo completo → status=processed con datos correctos."""
+    _patch_pipeline(monkeypatch, is_duplicate=False)
+
+    result = process_document(b"pdf bytes", "application/pdf", "factura.pdf", 9)
+
+    assert result.status == "processed"
+    assert result.doc_hash == hashlib.sha256(b"pdf bytes").hexdigest()
+    assert result.document_type == "invoice_received"
+    assert result.normalized_data["issuer_name"] == "Empresa SL"
+    assert result.extracted_data["issuer_name"] == "Empresa SL"
+
+
+def test_process_document_race_condition_returns_duplicate(monkeypatch):
+    """ValueError de guardar_si_no_existe (race condition) → status=duplicate, no excepción."""
+    _patch_pipeline(monkeypatch, is_duplicate=False, save_raises=ValueError("Documento duplicado"))
+
+    result = process_document(b"pdf bytes", "application/pdf", "factura.pdf", 9)
+
+    assert result.status == "duplicate"
+    assert result.doc_hash == hashlib.sha256(b"pdf bytes").hexdigest()
+    assert result.document_type is None
+
+
+def test_process_document_gemini_error_propagates(monkeypatch):
+    """Error de Gemini se propaga como excepción — el caller decide qué hacer."""
+    _patch_pipeline(monkeypatch, is_duplicate=False, gemini_raises=RuntimeError("Gemini unavailable"))
+
+    with pytest.raises(RuntimeError, match="Gemini unavailable"):
+        process_document(b"pdf bytes", "application/pdf", "factura.pdf", 9)
+
+
+def test_process_document_extra_passed_to_firestore(monkeypatch):
+    """El dict extra (metadata Gmail) llega al registro de Firestore."""
+    saved_records = []
+
+    def fake_guardar(transaction, coleccion, doc_hash, data):
+        saved_records.append(data)
+
+    _patch_pipeline(monkeypatch, is_duplicate=False)
+    monkeypatch.setattr(document_processor, "guardar_si_no_existe", fake_guardar)
+
+    process_document(
+        b"pdf bytes", "application/pdf", "factura.pdf", 9,
+        extra={"source": "gmail", "gmail_message_id": "msg42"},
+    )
+
+    assert len(saved_records) == 1
+    assert saved_records[0]["source"] == "gmail"
+    assert saved_records[0]["gmail_message_id"] == "msg42"
+
+
+def test_process_document_all_mime_types_accepted(monkeypatch):
+    """Todos los MIME de ALLOWED_MIME_TYPES son aceptados sin ValueError."""
+    from app.services.document_processor import ALLOWED_MIME_TYPES
+    _patch_pipeline(monkeypatch, is_duplicate=False)
+
+    for mime in ALLOWED_MIME_TYPES:
+        result = process_document(b"data", mime, "file", 4)
+        assert result.status == "processed", f"Falló para mime={mime}"
