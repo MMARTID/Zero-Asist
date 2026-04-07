@@ -1,12 +1,53 @@
-import hashlib
-from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from app.models.document import DocumentoNormalizado, DocumentType, ExtractedData
-from app.services.gemini_client import extract_from_file
-from app.ingestion.normalizer import normalize_document
-from app.services.firestore_client import db, guardar_si_no_existe
+import logging
+import os
+from fastapi import Header, Depends, FastAPI, HTTPException, UploadFile, File
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
+from app.services.document_processor import process_document
+from app.collectors.gmail_poller import poll_gmail
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+_DEV_TOKEN = os.environ.get("SCHEDULER_DEV_TOKEN")
+_OIDC_AUDIENCE = os.environ.get("SCHEDULER_AUDIENCE")
+
+
+def verify_scheduler_token(
+    x_scheduler_token: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> None:
+    """Dependencia FastAPI que autentica llamadas desde Cloud Scheduler.
+
+    Flujo:
+    1. Si X-Scheduler-Token coincide con SCHEDULER_DEV_TOKEN → permitido (dev local).
+    2. Si Authorization: Bearer <token> → valida OIDC con google-auth (producción).
+    3. Cualquier otro caso → 401.
+    """
+    if x_scheduler_token is not None:
+        if _DEV_TOKEN and x_scheduler_token == _DEV_TOKEN:
+            return
+        raise HTTPException(status_code=401, detail="X-Scheduler-Token inválido")
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+
+    if not _OIDC_AUDIENCE:
+        logger.error("SCHEDULER_AUDIENCE no configurado; rechazando token OIDC")
+        raise HTTPException(status_code=401, detail="Servicio no configurado para OIDC")
+
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            audience=_OIDC_AUDIENCE,
+        )
+    except Exception as exc:
+        logger.warning("Token OIDC inválido: %s", exc)
+        raise HTTPException(status_code=401, detail="Token inválido o expirado")
+
 
 @app.post("/procesar-documento")
 async def procesar_documento(file: UploadFile = File(...)):
@@ -14,6 +55,7 @@ async def procesar_documento(file: UploadFile = File(...)):
     if not contenido:
         raise HTTPException(status_code=400, detail="Archivo vacío")
 
+    # Detección de MIME por extensión si Content-Type está ausente (específico de HTTP)
     mime_type = file.content_type or ""
     if not mime_type:
         ext = file.filename.split('.')[-1].lower()
@@ -22,102 +64,42 @@ async def procesar_documento(file: UploadFile = File(...)):
             "jpg": "image/jpeg",
             "jpeg": "image/jpeg",
             "png": "image/png",
-            "xml": "application/xml"
-        }.get(ext, None)
-
+            "xml": "application/xml",
+        }.get(ext, "")
         if not mime_type:
             raise HTTPException(status_code=400, detail=f"Extensión no soportada: {ext}")
 
-    allowed_mimes = [
-        "application/pdf",
-        "image/jpeg",
-        "image/jpg",
-        "image/png",
-        "application/xml",
-        "text/xml"
-    ]
-
-    if mime_type not in allowed_mimes:
-        raise HTTPException(status_code=400, detail=f"Tipo de archivo no soportado: {mime_type}")
-
-    doc_hash = hashlib.sha256(contenido).hexdigest()
-
-    # 🔥 CHECK RÁPIDO (ANTES DE GEMINI)
-    doc_ref = db.collection("documentos").document(doc_hash)
-    if doc_ref.get().exists:
-        raise HTTPException(status_code=409, detail="Documento duplicado")
     try:
-        # Llamamos a Gemini SOLO una vez → devuelve { document_type, data }
-        raw_extracted = extract_from_file(contenido, mime_type)
-
-        document_type_str = raw_extracted.get("document_type", "other")
-        try:
-            document_type = DocumentType(document_type_str)
-        except ValueError:
-            document_type = DocumentType.other
-
-        data = raw_extracted.get("data", {})
-
-        # Intentamos mapear a ExtractedData para compatibilidad
-        try:
-            extracted_obj = ExtractedData(
-                issuer_name=data.get("issuer_name"),
-                issuer_tax_id=data.get("issuer_tax_id"),
-                invoice_number=data.get("invoice_number"),
-                issue_date=data.get("issue_date"),
-                total_amount=data.get("total_amount"),
-                raw=data
-            )
-        except Exception:
-            extracted_obj = ExtractedData(raw=data)
-
-        # Normalizamos según el tipo de documento
-        normalized = normalize_document(data, document_type.value)
-
+        result = process_document(
+            file_bytes=contenido,
+            mime_type=mime_type,
+            filename=file.filename,
+            file_size=len(contenido),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en extracción: {str(e)}")
 
-    doc_id = doc_hash  # Usamos el hash como ID del documento
-    now = datetime.utcnow()
-
-    # Convertir fechas date → datetime para Firestore
-    normalized_dict = dict(normalized)
-    for field in ["issue_date", "due_date", "period_start", "period_end"]:
-        if normalized_dict.get(field):
-            val = normalized_dict[field]
-            if hasattr(val, 'year'):  # es un objeto date
-                normalized_dict[field] = datetime.combine(val, datetime.min.time())
-
-    documento = DocumentoNormalizado(
-        id=doc_id,
-        file_name=file.filename,
-        file_size=len(contenido),
-        document_hash=doc_hash,
-        document_type=document_type,
-        extracted_data=extracted_obj,
-        normalized_data=normalized_dict,
-        created_at=now
-    )
-
-    transaction = db.transaction()
-
-    try:
-        guardar_si_no_existe(
-            transaction,
-            "documentos",
-            doc_hash,
-            {
-                **documento.dict(exclude={"normalized_data"}),
-                "normalized_data": normalized_dict,
-                "extracted_data": extracted_obj.dict(),
-                "document_type": document_type.value,
-            }
-        )
-    except ValueError:
+    if result.status == "duplicate":
         raise HTTPException(status_code=409, detail="Documento duplicado")
 
     return {
-        "documento_id": doc_id,
-        "document_type": document_type.value,
-        "normalized_data": normalized_dict
+        "documento_id": result.doc_hash,
+        "document_type": result.document_type,
+        "normalized_data": result.normalized_data,
+    }
+
+
+@app.post("/poll-gmail")
+def poll_gmail_endpoint(_: None = Depends(verify_scheduler_token)):
+    summary = poll_gmail()
+    return {
+        "procesados": len(summary["procesados"]),
+        "duplicados": len(summary["duplicados"]),
+        "errores": len(summary["errores"]),
+        "descartados": len(summary["descartados"]),
+        "documentos": summary["procesados"],
+        "detalle_duplicados": summary["duplicados"],
+        "detalle_errores": summary["errores"],
     }

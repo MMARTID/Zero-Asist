@@ -2,6 +2,8 @@ import re
 from datetime import datetime, date
 from typing import Any, Dict, Callable, List
 
+DATE_FIELDS = ["issue_date", "due_date", "period_start", "period_end"]
+
 def normalize_date(date_str: str | None) -> date | None:
     if not date_str or date_str == "null":
         return None
@@ -150,3 +152,24 @@ def normalize_document(data: Dict[str, Any], document_type: str) -> Dict[str, An
 def normalize_extracted_data(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Alias de compatibilidad. Usar normalize_document en su lugar."""
     return normalize_invoice_received(raw)
+
+
+def dates_to_firestore(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Converts date objects in known date fields to datetime for Firestore compatibility.
+
+    Firestore does not accept plain ``date`` objects — they must be ``datetime``.
+    This function converts any ``date`` (or ``datetime``) value found in the
+    standard date fields to a ``datetime`` with midnight time (UTC midnight).
+
+    Args:
+        data: Normalized document dict (mutated copy is returned; original unchanged).
+
+    Returns:
+        A new dict with date fields converted to ``datetime`` where applicable.
+    """
+    result = dict(data)
+    for field in DATE_FIELDS:
+        val = result.get(field)
+        if val is not None and hasattr(val, "year"):
+            result[field] = datetime.combine(val, datetime.min.time())
+    return result

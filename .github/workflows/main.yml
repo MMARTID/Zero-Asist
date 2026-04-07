@@ -18,12 +18,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"  # 🔥 cache automático
+          cache: "pip"
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Format check (black)
+        run: |
+          pip install black
+          black --check app/
 
       - name: Lint (flake8)
         run: |
