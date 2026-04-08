@@ -85,6 +85,8 @@ def _derive_message_status(
     has_processed = "procesados" in categories
     has_error = "errores" in categories
 
+    if has_error:
+        return "error", None
     if has_processed:
         return "processed", None
     if not has_error:
