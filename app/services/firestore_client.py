@@ -1,31 +1,37 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from google.cloud import firestore
-import os
+
+from app.services.constants import COLLECTION_DOCS, COLLECTION_GMAIL
 
 # Inicializar cliente de Firestore (usa las credenciales por defecto en Cloud Run)
 db = firestore.Client()
+
+
+class DocumentDuplicateError(Exception):
+    """Raised when a document already exists in Firestore."""
+
 
 @firestore.transactional
 def guardar_si_no_existe(transaction, coleccion: str, doc_hash: str, data: dict):
     ref = db.collection(coleccion).document(doc_hash)
     snapshot = ref.get(transaction=transaction)
     if snapshot.exists:
-        raise ValueError("Documento duplicado")
+        raise DocumentDuplicateError(f"Documento duplicado: {doc_hash}")
     transaction.set(ref, data)
-    
+
 def guardar_documento(coleccion: str, doc_id: str, data: dict):
     doc_ref = db.collection(coleccion).document(doc_id)
     doc_ref.set(data)
     return doc_id
 
 
-def is_message_processed(msg_id: str, include_errors: bool = True) -> bool:
+def is_message_processed(msg_id: str, include_errors: bool = False) -> bool:
     """Devuelve True si msg_id ya existe en gmail_processed.
-    Si include_errors=False, los mensajes con status='error' se consideran no procesados
-    para permitir reintentos.
+    Si include_errors=False (default), los mensajes con status='error' se consideran
+    no procesados para permitir reintentos.
     """
-    doc = db.collection("gmail_processed").document(msg_id).get()
+    doc = db.collection(COLLECTION_GMAIL).document(msg_id).get()
     if not doc.exists:
         return False
     if not include_errors and doc.to_dict().get("status") == "error":
@@ -43,14 +49,14 @@ def mark_message_processed(
     from_addr: Optional[str] = None,
 ) -> None:
     """Escribe (o sobreescribe) el registro de un mensaje Gmail en gmail_processed."""
-    db.collection("gmail_processed").document(msg_id).set({
+    db.collection(COLLECTION_GMAIL).document(msg_id).set({
         "msg_id": msg_id,
         "thread_id": thread_id or "",
         "from": from_addr or "",
         "subject": subject,
         "status": status,
         "reason": reason,
-        "processed_at": datetime.utcnow(),
+        "processed_at": datetime.now(timezone.utc),
         "document_hashes": document_hashes or [],
         "provider": "gmail",
     })

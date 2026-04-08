@@ -16,7 +16,10 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from app.ingestion.normalizer import dates_to_firestore, normalize_document
-from app.services.firestore_client import db, guardar_si_no_existe
+from app.models.document import DocumentType
+from app.services.constants import COLLECTION_DOCS
+from app.services.errors import PipelineError
+from app.services.firestore_client import db, DocumentDuplicateError, guardar_si_no_existe
 from app.services.gemini_client import extract_from_file
 
 logger = logging.getLogger(__name__)
@@ -47,7 +50,7 @@ def compute_hash(file_bytes: bytes) -> str:
 
 def is_document_duplicate(doc_hash: str) -> bool:
     """Returns ``True`` if a document with *doc_hash* already exists in Firestore."""
-    return db.collection("documentos").document(doc_hash).get().exists
+    return db.collection(COLLECTION_DOCS).document(doc_hash).get().exists
 
 
 def extract_and_normalize(file_bytes: bytes, mime_type: str) -> tuple[str, dict, dict]:
@@ -70,11 +73,20 @@ def extract_and_normalize(file_bytes: bytes, mime_type: str) -> tuple[str, dict,
     """
     raw_extracted = extract_from_file(file_bytes, mime_type)
     document_type_str = raw_extracted.get("document_type", "other")
-    extracted_data = raw_extracted.get("data", {})
+    extracted_data = raw_extracted.get("data") or {}
+
+    # Validate document_type against the enum; coerce invalid values to "other".
+    valid_types = {t.value for t in DocumentType}
+    if document_type_str not in valid_types:
+        logger.warning(
+            "Unknown document_type from Gemini: %r — coercing to 'other'",
+            document_type_str,
+        )
+        document_type_str = "other"
+
     normalized = normalize_document(extracted_data, document_type_str)
     normalized_dict = dates_to_firestore(dict(normalized))
     return document_type_str, normalized_dict, extracted_data
-
 
 def save_document(
     doc_hash: str,
@@ -115,7 +127,7 @@ def save_document(
     }
     if extra:
         record.update(extra)
-    guardar_si_no_existe(transaction, "documentos", doc_hash, record)
+    guardar_si_no_existe(transaction, COLLECTION_DOCS, doc_hash, record)
 
 
 def process_document(
@@ -151,7 +163,10 @@ def process_document(
                     (excluding duplicate race conditions, which return ``status="duplicate"``).
     """
     if mime_type not in ALLOWED_MIME_TYPES:
-        raise ValueError(f"Tipo de archivo no soportado: {mime_type}")
+        raise PipelineError(
+            code="INVALID_MIME",
+            message=f"Tipo de archivo no soportado: {mime_type}",
+        )
 
     doc_hash = compute_hash(file_bytes)
 
@@ -177,7 +192,7 @@ def process_document(
             extracted_data=extracted_data,
             extra=extra,
         )
-    except ValueError:
+    except DocumentDuplicateError:
         # Race condition: otro proceso guardó el mismo hash entre el check y el save.
         logger.debug("Duplicado detectado (race condition): hash=%s file=%s", doc_hash, filename)
         return ProcessingResult(

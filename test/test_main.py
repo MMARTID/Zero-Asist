@@ -1,8 +1,11 @@
 # tests/test_main.py
 
 import pytest
+from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
-from app.main import app, verify_scheduler_token
+from app.main import app
+from app.services.document_processor import ProcessingResult
+from app.services.errors import PipelineError
 
 client = TestClient(app)
 
@@ -11,51 +14,39 @@ client = TestClient(app)
 # Fixtures compartidos
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def fake_db(monkeypatch):
-    """Stub is_document_duplicate to return False (documento nuevo)."""
-    monkeypatch.setattr("app.main.is_document_duplicate", lambda _: False)
+def _processed_result(document_type="invoice_received", doc_hash="abc123"):
+    return ProcessingResult(
+        status="processed",
+        doc_hash=doc_hash,
+        document_type=document_type,
+        normalized_data={"issuer_name": "Empresa Test", "base_amount": 100.0},
+        extracted_data={"issuer_name": "Empresa Test"},
+    )
+
+
+def _duplicate_result(doc_hash="abc123"):
+    return ProcessingResult(
+        status="duplicate",
+        doc_hash=doc_hash,
+        document_type=None,
+        normalized_data=None,
+        extracted_data=None,
+    )
 
 
 @pytest.fixture
-def fake_extract(monkeypatch):
-    """Stub extract_and_normalize to return a standard received invoice."""
-    def _extract(file_bytes, mime_type):
-        normalized = {
-            "issuer_name": "Empresa Test",
-            "issue_date": None,
-            "base_amount": 100.0,
-            "tax_amount": 21.0,
-            "total_amount": 121.0,
-            "currency": "EUR",
-            "tax_breakdown": [],
-            "line_items": [],
-        }
-        extracted_data = {
-            "issuer_name": "Empresa Test",
-            "issue_date": "2024-01-01",
-            "base_amount": 100,
-            "tax_amount": 21,
-            "total_amount": 121,
-            "currency": "EUR",
-            "tax_breakdown": [],
-            "line_items": [],
-        }
-        return "invoice_received", normalized, extracted_data
-    monkeypatch.setattr("app.main.extract_and_normalize", _extract)
-    return _extract
-
-
-@pytest.fixture
-def fake_guardar(monkeypatch):
-    monkeypatch.setattr("app.main.save_document", lambda **kw: None)
+def mock_process(monkeypatch):
+    """Stub process_document to return a successful ProcessingResult by default."""
+    mock = MagicMock(return_value=_processed_result())
+    monkeypatch.setattr("app.api.documents.process_document", mock)
+    return mock
 
 
 # ---------------------------------------------------------------------------
 # /procesar-documento — happy path
 # ---------------------------------------------------------------------------
 
-def test_procesar_documento(monkeypatch, fake_db, fake_extract, fake_guardar):
+def test_procesar_documento(mock_process):
     response = client.post(
         "/procesar-documento",
         files={"file": ("test.pdf", b"fake content", "application/pdf")},
@@ -67,7 +58,7 @@ def test_procesar_documento(monkeypatch, fake_db, fake_extract, fake_guardar):
     assert data["normalized_data"]["issuer_name"] == "Empresa Test"
 
 
-def test_procesar_documento_mime_detectado_por_extension(monkeypatch, fake_db, fake_extract, fake_guardar):
+def test_procesar_documento_mime_detectado_por_extension(mock_process):
     """Sin Content-Type, el mime se infiere por extensión."""
     response = client.post(
         "/procesar-documento",
@@ -76,12 +67,9 @@ def test_procesar_documento_mime_detectado_por_extension(monkeypatch, fake_db, f
     assert response.status_code == 200
 
 
-def test_procesar_documento_document_type_unknown_to_other(monkeypatch, fake_db, fake_guardar):
-    """Si Gemini devuelve un tipo desconocido, se mapea a 'other'."""
-    monkeypatch.setattr(
-        "app.main.extract_and_normalize",
-        lambda *a, **kw: ("tipo_inventado", {}, {}),
-    )
+def test_procesar_documento_document_type_unknown_to_other(mock_process):
+    """process_document ya normalizó a 'other'; endpoint lo devuelve tal cual."""
+    mock_process.return_value = _processed_result(document_type="other")
     response = client.post(
         "/procesar-documento",
         files={"file": ("doc.pdf", b"x", "application/pdf")},
@@ -103,16 +91,25 @@ def test_procesar_documento_archivo_vacio():
     assert "vacío" in response.json()["detail"]
 
 
-def test_procesar_documento_mime_no_soportado():
+def test_procesar_documento_mime_no_soportado(monkeypatch):
+    """MIME no soportado → process_document lanza PipelineError(INVALID_MIME) → 400."""
+    monkeypatch.setattr(
+        "app.api.documents.process_document",
+        MagicMock(side_effect=PipelineError(
+            code="INVALID_MIME",
+            message="Tipo de archivo no soportado: application/octet-stream",
+        )),
+    )
     response = client.post(
         "/procesar-documento",
         files={"file": ("doc.exe", b"fake", "application/octet-stream")},
     )
     assert response.status_code == 400
+    assert "no soportado" in response.json()["detail"]
 
 
 def test_procesar_documento_extension_desconocida():
-    """Sin Content-Type y extensión no soportada → 400."""
+    """Sin Content-Type y extensión no soportada → 400 (bloqueado antes de process_document)."""
     response = client.post(
         "/procesar-documento",
         files={"file": ("archivo.xyz", b"fake", "")},
@@ -121,10 +118,12 @@ def test_procesar_documento_extension_desconocida():
     assert "Extensión no soportada" in response.json()["detail"]
 
 
-def test_procesar_documento_duplicado_precheck(monkeypatch):
-    """El documento ya existe en Firestore (pre-check) → 409."""
-    monkeypatch.setattr("app.main.is_document_duplicate", lambda _: True)
-
+def test_procesar_documento_duplicado(monkeypatch):
+    """process_document devuelve status='duplicate' → 409."""
+    monkeypatch.setattr(
+        "app.api.documents.process_document",
+        MagicMock(return_value=_duplicate_result()),
+    )
     response = client.post(
         "/procesar-documento",
         files={"file": ("dup.pdf", b"fake content", "application/pdf")},
@@ -133,98 +132,54 @@ def test_procesar_documento_duplicado_precheck(monkeypatch):
     assert "duplicado" in response.json()["detail"].lower()
 
 
-def test_procesar_documento_duplicado_transaccion(monkeypatch, fake_db, fake_extract):
-    """save_document lanza ValueError (race condition) → 409."""
-    def _raise(**kw):
-        raise ValueError("Documento duplicado")
-
-    monkeypatch.setattr("app.main.save_document", _raise)
+def test_procesar_documento_servicio_externo_no_disponible(monkeypatch):
+    """Gemini devuelve 503 → PipelineError(UNAVAILABLE) → 503."""
+    monkeypatch.setattr(
+        "app.api.documents.process_document",
+        MagicMock(side_effect=PipelineError(
+            code="UNAVAILABLE",
+            message="El servicio externo no está disponible temporalmente (503).",
+        )),
+    )
     response = client.post(
         "/procesar-documento",
-        files={"file": ("dup2.pdf", b"fake content", "application/pdf")},
+        files={"file": ("factura.pdf", b"fake", "application/pdf")},
     )
-    assert response.status_code == 409
+    assert response.status_code == 503
+    assert "disponible" in response.json()["detail"]
 
 
-def test_procesar_documento_gemini_error(monkeypatch, fake_db):
-    """Si la extracción falla → 500."""
+def test_procesar_documento_error_inesperado(monkeypatch):
+    """Error inesperado no clasificado → PipelineError(UNKNOWN) → 500."""
     monkeypatch.setattr(
-        "app.main.extract_and_normalize",
-        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("Gemini down")),
+        "app.api.documents.process_document",
+        MagicMock(side_effect=PipelineError(
+            code="UNKNOWN",
+            message="Error inesperado durante el procesamiento.",
+        )),
     )
     response = client.post(
         "/procesar-documento",
         files={"file": ("err.pdf", b"fake", "application/pdf")},
     )
     assert response.status_code == 500
-    assert "Error en extracción" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
-# /poll-gmail — autenticación
+# /poll-gmail
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
 def mock_poll(monkeypatch):
     """Stub de poll_gmail que devuelve un resumen vacío."""
     monkeypatch.setattr(
-        "app.main.poll_gmail",
+        "app.api.gmail.poll_gmail",
         lambda: {"procesados": [], "duplicados": [], "errores": [], "descartados": []},
     )
 
 
-def test_poll_gmail_sin_auth_401():
-    """Sin cabecera de autenticación → 401."""
+def test_poll_gmail_200(mock_poll):
+    """Sin auth scheduler, el endpoint responde 200 directamente."""
     response = client.post("/poll-gmail")
-    assert response.status_code == 401
-
-
-def test_poll_gmail_x_scheduler_token_incorrecto_401(monkeypatch):
-    """X-Scheduler-Token presente pero incorrecto → 401."""
-    monkeypatch.setattr("app.main._DEV_TOKEN", "token-correcto")
-    response = client.post("/poll-gmail", headers={"X-Scheduler-Token": "token-malo"})
-    assert response.status_code == 401
-
-
-def test_poll_gmail_x_scheduler_token_sin_configurar_401(monkeypatch):
-    """X-Scheduler-Token enviado pero SCHEDULER_DEV_TOKEN no configurado → 401."""
-    monkeypatch.setattr("app.main._DEV_TOKEN", None)
-    response = client.post("/poll-gmail", headers={"X-Scheduler-Token": "cualquier-cosa"})
-    assert response.status_code == 401
-
-
-def test_poll_gmail_x_scheduler_token_correcto_200(monkeypatch, mock_poll):
-    """X-Scheduler-Token correcto → 200."""
-    monkeypatch.setattr("app.main._DEV_TOKEN", "mi-token-dev")
-    response = client.post("/poll-gmail", headers={"X-Scheduler-Token": "mi-token-dev"})
     assert response.status_code == 200
     assert "procesados" in response.json()
-
-
-def test_poll_gmail_oidc_sin_audience_401(monkeypatch):
-    """Authorization: Bearer enviado pero SCHEDULER_AUDIENCE no configurado → 401."""
-    monkeypatch.setattr("app.main._OIDC_AUDIENCE", None)
-    response = client.post("/poll-gmail", headers={"Authorization": "Bearer fake.token"})
-    assert response.status_code == 401
-
-
-def test_poll_gmail_oidc_token_invalido_401(monkeypatch):
-    """Authorization: Bearer con token inválido → 401."""
-    monkeypatch.setattr("app.main._OIDC_AUDIENCE", "https://example.run.app")
-    monkeypatch.setattr(
-        "app.main.id_token.verify_oauth2_token",
-        lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad token")),
-    )
-    response = client.post("/poll-gmail", headers={"Authorization": "Bearer invalid.jwt"})
-    assert response.status_code == 401
-
-
-def test_poll_gmail_oidc_token_valido_200(monkeypatch, mock_poll):
-    """Authorization: Bearer con token OIDC válido → 200."""
-    monkeypatch.setattr("app.main._OIDC_AUDIENCE", "https://example.run.app")
-    monkeypatch.setattr(
-        "app.main.id_token.verify_oauth2_token",
-        lambda *a, **kw: {"sub": "sa@project.iam.gserviceaccount.com"},
-    )
-    response = client.post("/poll-gmail", headers={"Authorization": "Bearer valid.jwt"})
-    assert response.status_code == 200

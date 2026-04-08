@@ -8,7 +8,6 @@ from app.ingestion.normalizer import (
     normalize_document,
     normalize_document_with_report,
     register_normalizer,
-    normalize_extracted_data,
     _normalize_currency,
     _normalize_company_name,
     _split_invoice_series,
@@ -144,27 +143,6 @@ def test_normalize_document_tipo_desconocido_usa_generic():
 # ---------------------------------------------------------------------------
 # Alias de compatibilidad
 # ---------------------------------------------------------------------------
-
-def test_normalize_extracted_data_basic():
-    raw = {
-        "issuer_name": "Empresa SL",
-        "issue_date": "2024-01-10",
-        "base_amount": "100,50",
-        "tax_amount": "21.10",
-        "total_amount": "121.60",
-        "currency": None,
-        "tax_breakdown": [{"rate": "21", "base": "100,50", "amount": "21.10"}],
-        "line_items": [{"description": "Producto", "quantity": "1", "unit_price": "100,50"}],
-    }
-    result = normalize_extracted_data(raw)
-
-    assert result["issuer_name"] == "Empresa SL"
-    assert result["issue_date"].year == 2024
-    assert result["base_amount"] == pytest.approx(100.50)
-    assert result["currency"] == "EUR"
-    assert isinstance(result["tax_breakdown"], list)
-    assert isinstance(result["line_items"], list)
-
 
 def test_normalize_document_listas_vacias():
     raw = {"tax_breakdown": [], "line_items": None}

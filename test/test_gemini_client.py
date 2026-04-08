@@ -74,7 +74,9 @@ def test_extract_from_file_mime_no_soportado():
 
 
 def test_extract_from_file_respuesta_json_invalida(monkeypatch):
-    """Si Gemini devuelve JSON malformado → JSONDecodeError propagado."""
+    """Si Gemini devuelve JSON malformado → PipelineError(UNKNOWN) propagado."""
+    from app.services.errors import PipelineError
+
     class BadResponse:
         text = "esto no es json {{{"
 
@@ -83,8 +85,9 @@ def test_extract_from_file_respuesta_json_invalida(monkeypatch):
         "generate_content",
         lambda *a, **kw: BadResponse(),
     )
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(PipelineError) as exc_info:
         gemini_client.extract_from_file(b"fake", "application/pdf")
+    assert exc_info.value.code == "UNKNOWN"
 
 
 # ---------------------------------------------------------------------------

@@ -6,13 +6,13 @@ from app.collectors.gmail_reader import (
     get_attachments,
 )
 from app.services.document_processor import process_document
+from app.services.errors import PipelineError
 from app.services.firestore_client import (
     is_message_processed,
     mark_message_processed,
 )
 
 logger = logging.getLogger(__name__)
-
 
 def poll_gmail(
     query: str = "has:attachment (filename:pdf OR filename:xml OR filename:jpg OR filename:png)",
@@ -52,7 +52,7 @@ def poll_gmail(
         thread_id = msg.get("thread_id", "")
         from_addr = msg.get("from", "")
 
-        if is_message_processed(msg_id):
+        if is_message_processed(msg_id, include_errors=False):
             logger.debug(f"⏭️  Ya procesado, ignorando: '{subject}'")
             continue
 
@@ -109,15 +109,33 @@ def poll_gmail(
                         "gmail_from": from_addr,
                     },
                 )
-            except Exception as e:
-                logger.error(f"❌ Error procesando {filename}: {e}")
+            except PipelineError as e:
+                logger.error("❌ Error procesando %s: %s", filename, e)
                 summary["errores"].append({
                     "file_name": filename,
                     "gmail_message_id": msg_id,
-                    "reason": str(e),
+                    "error_code": e.code,
+                    "error_message": e.message,
                 })
                 msg_has_error = True
-                msg_error_reason = str(e)
+                # Keep the most-severe code seen so far (UNAVAILABLE > RATE_LIMIT > … > UNKNOWN)
+                if msg_error_reason is None or e.code != "UNKNOWN":
+                    msg_error_reason = e.code
+                continue
+            except Exception as e:
+                # Unexpected exception not already wrapped — wrap it now so
+                # nothing raw ever reaches Firestore.
+                pipeline_err = PipelineError.from_exception(e)
+                logger.exception("❌ Error inesperado procesando %s: %s", filename, e)
+                summary["errores"].append({
+                    "file_name": filename,
+                    "gmail_message_id": msg_id,
+                    "error_code": pipeline_err.code,
+                    "error_message": pipeline_err.message,
+                })
+                msg_has_error = True
+                if msg_error_reason is None or pipeline_err.code != "UNKNOWN":
+                    msg_error_reason = pipeline_err.code
                 continue
 
             if result.status == "duplicate":
@@ -141,16 +159,19 @@ def poll_gmail(
                 msg_hashes.append(result.doc_hash)
                 msg_has_processed = True
 
-        if msg_has_processed:
-            final_status = "processed"
-        elif msg_has_error:
+        # Determine final status for this message after all its attachments.
+        if msg_has_error and not msg_has_processed:
             final_status = "error"
-        else:
+        elif msg_has_processed:
+            final_status = "processed"
+        elif msg_has_duplicate:
             final_status = "duplicate"
+        else:
+            final_status = "error"
 
         mark_message_processed(
             msg_id, final_status, subject,
-            reason=msg_error_reason,
+            reason=msg_error_reason if final_status == "error" else None,
             document_hashes=msg_hashes,
             thread_id=thread_id,
             from_addr=from_addr,

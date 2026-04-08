@@ -8,8 +8,8 @@ from google.auth.transport.requests import Request
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
-TOKEN_PATH = "app/collectors/token.json"
-CREDENTIALS_PATH = "app/collectors/credentials.json"
+TOKEN_PATH = os.environ.get("GMAIL_TOKEN_PATH", "app/collectors/token.json")
+CREDENTIALS_PATH = os.environ.get("GMAIL_CREDENTIALS_PATH", "app/collectors/credentials.json")
 
 # Variable de entorno con el contenido JSON del token (para Cloud Run / producción).
 # En desarrollo local se usa el archivo TOKEN_PATH como fallback.

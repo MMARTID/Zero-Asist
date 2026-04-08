@@ -1,8 +1,19 @@
 # tests/test_gmail_poller.py
+"""Tests for app.collectors.gmail_poller.
+
+poll_gmail() delegates document processing to process_document(), so tests
+mock process_document() at the poller's module level and focus on:
+  - Gmail-level filtering (heuristics, attachment presence, already-processed)
+  - Correct routing of ProcessingResult.status values into the summary
+  - PipelineError → clean error_code / error_message in summary + Firestore
+  - mark_message_processed called with the right arguments
+"""
 
 import pytest
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
 from app.collectors.gmail_poller import poll_gmail
+from app.services.document_processor import ProcessingResult
+from app.services.errors import PipelineError
 
 
 # ---------------------------------------------------------------------------
@@ -24,15 +35,32 @@ def _make_attachment(filename="factura.pdf", mime_type="application/pdf", conten
     return {"filename": filename, "mime_type": mime_type, "data": content}
 
 
+def _processed_result(doc_hash="abc123", document_type="invoice_received"):
+    return ProcessingResult(
+        status="processed",
+        doc_hash=doc_hash,
+        document_type=document_type,
+        normalized_data={"issuer_name": "Proveedor"},
+        extracted_data={"issuer_name": "Proveedor"},
+    )
+
+
+def _duplicate_result(doc_hash="abc123"):
+    return ProcessingResult(
+        status="duplicate",
+        doc_hash=doc_hash,
+        document_type=None,
+        normalized_data=None,
+        extracted_data=None,
+    )
+
+
 @pytest.fixture
 def base_mocks(monkeypatch):
-    """Prepara todos los mocks externos del poller. Devuelve un namespace para ajustar."""
+    """Sets up all external mocks for the poller. Returns a namespace to adjust."""
     mocks = MagicMock()
 
-    # Gmail service (no hace nada real)
     monkeypatch.setattr("app.collectors.gmail_poller.get_gmail_service", lambda: mocks.service)
-
-    # Por defecto: un candidato que pasa la heurística con un adjunto PDF
     monkeypatch.setattr(
         "app.collectors.gmail_poller.list_candidate_messages",
         lambda *a, **kw: [_make_msg()],
@@ -46,28 +74,10 @@ def base_mocks(monkeypatch):
         lambda *a, **kw: [_make_attachment()],
     )
 
-    # Duplicate check (no duplicate by default)
-    monkeypatch.setattr(
-        "app.collectors.gmail_poller.is_document_duplicate",
-        lambda doc_hash: False,
-    )
-    mocks.is_dup = False
+    # Default: process_document succeeds
+    mocks.process = MagicMock(return_value=_processed_result())
+    monkeypatch.setattr("app.collectors.gmail_poller.process_document", mocks.process)
 
-    # extract_and_normalize
-    monkeypatch.setattr(
-        "app.collectors.gmail_poller.extract_and_normalize",
-        lambda data, mime_type: (
-            "invoice_received",
-            {"issuer_name": "Proveedor"},
-            {"issuer_name": "Proveedor"},
-        ),
-    )
-
-    # save_document (no-op by default)
-    mocks.save = MagicMock()
-    monkeypatch.setattr("app.collectors.gmail_poller.save_document", mocks.save)
-
-    # historial
     monkeypatch.setattr("app.collectors.gmail_poller.is_message_processed", lambda *a, **kw: False)
     mocks.mark = MagicMock()
     monkeypatch.setattr("app.collectors.gmail_poller.mark_message_processed", mocks.mark)
@@ -89,10 +99,8 @@ def test_poll_gmail_happy_path(base_mocks):
     assert len(summary["duplicados"]) == 0
     assert len(summary["descartados"]) == 0
 
-    # Verificar que se registró en historial con status correcto
     base_mocks.mark.assert_called_once()
-    call_kwargs = base_mocks.mark.call_args
-    assert call_kwargs.args[1] == "processed"
+    assert base_mocks.mark.call_args.args[1] == "processed"
 
 
 def test_poll_gmail_mensaje_ya_procesado_skip(monkeypatch):
@@ -108,9 +116,7 @@ def test_poll_gmail_mensaje_ya_procesado_skip(monkeypatch):
 
     summary = poll_gmail()
 
-    # No debe aparecer en ninguna categoría del summary
     assert all(len(v) == 0 for v in summary.values())
-    # No debe llamar a mark_message_processed (ya estaba marcado)
     mark.assert_not_called()
 
 
@@ -162,91 +168,91 @@ def test_poll_gmail_descartado_sin_adjuntos(monkeypatch):
     assert mark.call_args.kwargs.get("reason") == "sin_adjuntos"
 
 
-def test_poll_gmail_adjunto_duplicado_por_hash(base_mocks, monkeypatch):
-    """Adjunto cuyo hash ya existe en Firestore → contado como duplicado."""
-    monkeypatch.setattr(
-        "app.collectors.gmail_poller.is_document_duplicate",
-        lambda doc_hash: True,
-    )
+def test_poll_gmail_adjunto_duplicado(base_mocks):
+    """process_document devuelve 'duplicate' → contado como duplicado."""
+    base_mocks.process.return_value = _duplicate_result()
 
     summary = poll_gmail()
 
     assert len(summary["duplicados"]) == 1
     assert len(summary["procesados"]) == 0
-
-    base_mocks.mark.assert_called_once()
     assert base_mocks.mark.call_args.args[1] == "duplicate"
 
 
-def test_poll_gmail_error_en_gemini(base_mocks, monkeypatch):
-    """Error en extracción → adjunto en errores, mensaje marcado como 'error'."""
-    monkeypatch.setattr(
-        "app.collectors.gmail_poller.extract_and_normalize",
-        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("Gemini timeout")),
+def test_poll_gmail_pipeline_error_unavailable(base_mocks):
+    """PipelineError(UNAVAILABLE) → error_code limpio en summary y Firestore."""
+    base_mocks.process.side_effect = PipelineError(
+        code="UNAVAILABLE",
+        message="El servicio externo no está disponible temporalmente (503).",
     )
 
     summary = poll_gmail()
 
     assert len(summary["errores"]) == 1
-    assert "Gemini timeout" in summary["errores"][0]["reason"]
+    err = summary["errores"][0]
+    assert err["error_code"] == "UNAVAILABLE"
+    assert "503" in err["error_message"] or "disponible" in err["error_message"]
     assert base_mocks.mark.call_args.args[1] == "error"
+    assert base_mocks.mark.call_args.kwargs.get("reason") == "UNAVAILABLE"
 
 
-def test_poll_gmail_error_check_duplicado(base_mocks, monkeypatch):
-    """Error al consultar Firestore para check duplicado → error en summary."""
-    def _raise(doc_hash):
-        raise Exception("Firestore unavailable")
-
-    monkeypatch.setattr("app.collectors.gmail_poller.is_document_duplicate", _raise)
+def test_poll_gmail_error_inesperado_wrapped(base_mocks):
+    """Excepción inesperada (no PipelineError) → envuelta; nunca el error crudo en Firestore."""
+    base_mocks.process.side_effect = RuntimeError("raw internal crash with long payload xyz")
 
     summary = poll_gmail()
 
     assert len(summary["errores"]) == 1
-    assert "error_check_duplicado" in summary["errores"][0]["reason"]
-    assert base_mocks.mark.call_args.args[1] == "error"
+    err = summary["errores"][0]
+    # error_code must be a clean category — raw message must NOT leak
+    assert err["error_code"] in {"UNAVAILABLE", "RATE_LIMIT", "TIMEOUT", "VALIDATION", "UNKNOWN"}
+    assert "raw internal crash" not in err["error_code"]
+    assert "raw internal crash" not in err["error_message"]
+    reason = base_mocks.mark.call_args.kwargs.get("reason")
+    assert reason in {"UNAVAILABLE", "RATE_LIMIT", "TIMEOUT", "VALIDATION", "UNKNOWN"}
 
 
 def test_poll_gmail_multiples_adjuntos_uno_procesado_uno_duplicado(base_mocks, monkeypatch):
-    """Mensaje con 2 adjuntos: uno nuevo y uno duplicado → status final 'processed'."""
-    content_new = b"PDF nuevo"
-    content_dup = b"PDF duplicado"
-
-    def fake_attachments(*a, **kw):
-        return [
-            _make_attachment(filename="nuevo.pdf", content=content_new),
-            _make_attachment(filename="dup.pdf", content=content_dup),
-        ]
-
-    monkeypatch.setattr("app.collectors.gmail_poller.get_attachments", fake_attachments)
-
-    import hashlib
-    hash_new = hashlib.sha256(content_new).hexdigest()
-    hash_dup = hashlib.sha256(content_dup).hexdigest()
-
-    def fake_is_dup(doc_hash):
-        return doc_hash == hash_dup
-
-    monkeypatch.setattr("app.collectors.gmail_poller.is_document_duplicate", fake_is_dup)
+    """2 adjuntos: uno nuevo + uno duplicado → status final 'processed'."""
+    monkeypatch.setattr(
+        "app.collectors.gmail_poller.get_attachments",
+        lambda *a, **kw: [
+            _make_attachment(filename="nuevo.pdf"),
+            _make_attachment(filename="dup.pdf"),
+        ],
+    )
+    base_mocks.process.side_effect = [
+        _processed_result(doc_hash="hash1"),
+        _duplicate_result(doc_hash="hash2"),
+    ]
 
     summary = poll_gmail()
 
     assert len(summary["procesados"]) == 1
     assert len(summary["duplicados"]) == 1
-    # Status final optimista → processed
     assert base_mocks.mark.call_args.args[1] == "processed"
 
 
-def test_poll_gmail_duplicado_en_transaccion(base_mocks, monkeypatch):
-    """save_document lanza ValueError (race condition) → duplicado."""
-    def _raise(**kw):
-        raise ValueError("Documento duplicado")
-
-    monkeypatch.setattr("app.collectors.gmail_poller.save_document", _raise)
+def test_poll_gmail_multiples_adjuntos_todos_error(base_mocks, monkeypatch):
+    """2 adjuntos con error → status final 'error', reason limpio."""
+    monkeypatch.setattr(
+        "app.collectors.gmail_poller.get_attachments",
+        lambda *a, **kw: [
+            _make_attachment(filename="a.pdf"),
+            _make_attachment(filename="b.pdf"),
+        ],
+    )
+    base_mocks.process.side_effect = [
+        PipelineError(code="RATE_LIMIT", message="Límite alcanzado."),
+        PipelineError(code="UNAVAILABLE", message="Servicio caído."),
+    ]
 
     summary = poll_gmail()
 
-    assert len(summary["duplicados"]) == 1
-    assert base_mocks.mark.call_args.args[1] == "duplicate"
+    assert len(summary["errores"]) == 2
+    assert base_mocks.mark.call_args.args[1] == "error"
+    reason = base_mocks.mark.call_args.kwargs.get("reason")
+    assert reason in {"RATE_LIMIT", "UNAVAILABLE"}
 
 
 def test_poll_gmail_sin_candidatos(monkeypatch):

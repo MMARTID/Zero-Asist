@@ -1,9 +1,13 @@
 # gemini_client.py
 import os
 import json
+import logging
 from dotenv import load_dotenv
 from google.genai import Client, types
 from app.models.document import DocumentoExtraido
+from app.services.errors import PipelineError
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -20,6 +24,9 @@ SYSTEM_INSTRUCTION = (
 
 client = Client(api_key=os.getenv("GEMINI_API_KEY"))
 
+# NOTE: response_schema is bound to DocumentoExtraido / GeminiExtractionSchema.
+# GeminiExtractionSchema must stay flat (no Union / discriminated fields) —
+# Gemini rejects response_schema that contain anyOf or complex nested unions.
 generation_config = types.GenerateContentConfig(
     system_instruction=SYSTEM_INSTRUCTION,
     temperature=0,
@@ -51,14 +58,26 @@ def extract_from_file(file_bytes: bytes, mime_type: str) -> dict:
     else:
         raise ValueError(f"Tipo MIME no soportado: {mime_type}")
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=contents,
-        config=generation_config,
-    )
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=generation_config,
+        )
+    except PipelineError:
+        raise
+    except Exception as e:
+        logger.debug("Gemini API error (raw): %s", e)
+        raise PipelineError.from_exception(e) from e
 
-    return json.loads(response.text)
+    try:
+        raw = json.loads(response.text)
+        validated = DocumentoExtraido.model_validate(raw)
+    except Exception as e:
+        logger.debug("Gemini response parse/validation error (raw): %s", e)
+        raise PipelineError.from_exception(e) from e
 
+    return validated.model_dump()
 
 def extract_from_pdf(pdf_bytes: bytes) -> dict:
     return extract_from_file(pdf_bytes, "application/pdf")

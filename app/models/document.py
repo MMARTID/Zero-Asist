@@ -100,11 +100,19 @@ class BankStatementData(BaseModel):
     transactions: List[BankTransaction] = Field(default_factory=list)
 
 
-class ExtractedPayload(BaseModel):
+class GeminiExtractionSchema(BaseModel):
     """
-    Modelo unificado con todos los campos posibles según el tipo de documento.
-    Todos los campos son opcionales; Gemini solo rellena los que aplican.
-    Compatible con Gemini response_schema (sin dict ni additionalProperties).
+    Schema plano usado como ``response_schema`` en la API de Gemini.
+
+    IMPORTANTE — restricción de diseño:
+    Esta clase DEBE permanecer plana (sin Union, sin discriminadores).
+    Gemini no soporta tipos discriminados en ``response_schema``; si se
+    intenta usar un modelo con campos Union o anyOf, la llamada falla.
+
+    Todos los campos son opcionales; Gemini solo rellena los que aplican
+    al tipo de documento detectado.  Los modelos específicos por tipo
+    (``InvoiceReceivedData``, ``InvoiceIssuedData``, ``BankStatementData``)
+    son los esquemas de *salida normalizada* — una capa distinta.
     """
     # --- Campos comunes a facturas (invoice_received / invoice_issued) ---
     issuer_name: Optional[str] = None
@@ -134,13 +142,13 @@ class ExtractedPayload(BaseModel):
     transactions: List[BankTransaction] = Field(default_factory=list)
 
 
+
+
+
 class DocumentoExtraido(BaseModel):
     document_type: DocumentType
-    data: ExtractedPayload = Field(default_factory=ExtractedPayload)
-
-
-# Alias de compatibilidad
-FacturaData = InvoiceReceivedData
+    # ``data`` uses the flat GeminiExtractionSchema intentionally — see that class's docstring.
+    data: GeminiExtractionSchema = Field(default_factory=GeminiExtractionSchema)
 
 
 class DocumentoNormalizado(BaseModel):

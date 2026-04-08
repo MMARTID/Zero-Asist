@@ -7,6 +7,11 @@ from typing import Any, Callable, Dict
 from pydantic import ValidationError
 
 from app.models.document import BankStatementData, InvoiceIssuedData, InvoiceReceivedData
+from app.models.registry import (
+    DOCUMENT_TYPE_REGISTRY,
+    DocumentTypeConfig,
+    register_document_type,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,17 +69,11 @@ class NormalizationContext:
         self.issues.append(ValidationIssue(field=field_name, reason=reason, kind=kind, value=value))
 
 
-SCHEMA_BY_TYPE: dict[str, type] = {
-    "invoice_received": InvoiceReceivedData,
-    "invoice_issued": InvoiceIssuedData,
-    "bank_statement": BankStatementData,
-}
+SCHEMA_BY_TYPE: dict[str, type] = {}
+"""Backward-compatible alias — populated at module bottom via ``register_document_type``."""
 
-REQUIRED_FIELDS_BY_TYPE: dict[str, list[str]] = {
-    "invoice_received": ["issuer_name", "invoice_number", "total_amount"],
-    "invoice_issued": ["issuer_name", "receiver_name", "invoice_number", "total_amount"],
-    "bank_statement": ["bank_name", "period_start", "period_end"],
-}
+REQUIRED_FIELDS_BY_TYPE: dict[str, list[str]] = {}
+"""Backward-compatible alias — populated at module bottom via ``register_document_type``."""
 
 RANGE_RULES: dict[str, tuple[float, float]] = {
     "confidence_score": (0.0, 1.0),
@@ -617,20 +616,29 @@ def normalize_generic(raw: Dict[str, Any], ctx: NormalizationContext | None = No
     return out
 
 
-NORMALIZERS: dict[str, Callable[[Dict[str, Any], NormalizationContext | None], Dict[str, Any]]] = {
-    "invoice_received": normalize_invoice_received,
-    "invoice_issued": normalize_invoice_issued,
-    "bank_statement": normalize_bank_statement,
-}
 
 
-def register_normalizer(document_type: str, normalizer: Callable[[Dict[str, Any], NormalizationContext | None], Dict[str, Any]]) -> None:
-    """Register a custom normalizer for a document type."""
-    NORMALIZERS[document_type] = normalizer
+
+def register_normalizer(
+    document_type: str,
+    normalizer: Callable[[Dict[str, Any], NormalizationContext | None], Dict[str, Any]],
+) -> None:
+    """Register a normalizer for *document_type*."""
+    existing = DOCUMENT_TYPE_REGISTRY.get(document_type)
+    register_document_type(
+        DocumentTypeConfig(
+            document_type=document_type,
+            normalizer=normalizer,
+            schema=existing.schema if existing else None,
+            required_fields=existing.required_fields if existing else [],
+        )
+    )
 
 
 def _validate_required_fields(normalized: Dict[str, Any], document_type: str, ctx: NormalizationContext) -> None:
-    for field_name in REQUIRED_FIELDS_BY_TYPE.get(document_type, []):
+    config = DOCUMENT_TYPE_REGISTRY.get(document_type)
+    required = config.required_fields if config else []
+    for field_name in required:
         if normalized.get(field_name) in (None, "", []):
             ctx.add_issue(field_name, "required_field_missing", "missing")
             ctx.record(field_name, None, normalized.get(field_name), "required_field_check", "missing")
@@ -651,7 +659,8 @@ def _validate_ranges(normalized: Dict[str, Any], ctx: NormalizationContext) -> N
 
 
 def _validate_schema(normalized: Dict[str, Any], document_type: str, ctx: NormalizationContext) -> None:
-    schema = SCHEMA_BY_TYPE.get(document_type)
+    config = DOCUMENT_TYPE_REGISTRY.get(document_type)
+    schema = config.schema if config else None
     if not schema:
         return
     try:
@@ -763,7 +772,8 @@ def normalize_document_with_report(
             _finalize_validation(document_type, {}, ctx)
         data = {}
 
-    normalizer = NORMALIZERS.get(document_type, normalize_generic)
+    config = DOCUMENT_TYPE_REGISTRY.get(document_type)
+    normalizer = config.normalizer if config else normalize_generic
     normalized = normalizer(data, ctx)
     _finalize_validation(document_type, normalized, ctx)
 
@@ -785,18 +795,66 @@ def normalize_document(data: Dict[str, Any], document_type: str) -> Dict[str, An
     return report.normalized
 
 
-def normalize_extracted_data(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """Backward-compatible alias. Prefer ``normalize_document``."""
-    return normalize_invoice_received(raw)
+
+
+
+def _date_to_datetime(value: Any) -> Any:
+    """Convert a date or datetime to a midnight datetime for Firestore."""
+    if isinstance(value, datetime):
+        return datetime.combine(value.date(), datetime.min.time())
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    return value
 
 
 def dates_to_firestore(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert date fields to datetime for Firestore compatibility."""
+    """Convert date fields to datetime for Firestore compatibility.
+
+    Handles both top-level fields in ``DATE_FIELDS`` and nested
+    ``transactions[].date`` fields found in bank statements.
+    """
     result = dict(data)
     for field_name in DATE_FIELDS:
-        value = result.get(field_name)
-        if isinstance(value, datetime):
-            result[field_name] = datetime.combine(value.date(), datetime.min.time())
-        elif isinstance(value, date):
-            result[field_name] = datetime.combine(value, datetime.min.time())
+        if field_name in result:
+            result[field_name] = _date_to_datetime(result[field_name])
+
+    # Bank-statement transactions contain a date field that also needs conversion.
+    if "transactions" in result and isinstance(result["transactions"], list):
+        converted = []
+        for txn in result["transactions"]:
+            if isinstance(txn, dict) and "date" in txn:
+                txn = dict(txn)
+                txn["date"] = _date_to_datetime(txn["date"])
+            converted.append(txn)
+        result["transactions"] = converted
+
     return result
+
+
+# ---------------------------------------------------------------------------
+# Register built-in document types
+# ---------------------------------------------------------------------------
+# This block is the single source of truth for the three supported types.
+# To add a new type: define its Pydantic schema in document.py, define its
+# normalizer function here, and call register_document_type once below.
+
+register_document_type(DocumentTypeConfig(
+    document_type="invoice_received",
+    normalizer=normalize_invoice_received,
+    schema=InvoiceReceivedData,
+    required_fields=["issuer_name", "invoice_number", "total_amount"],
+))
+register_document_type(DocumentTypeConfig(
+    document_type="invoice_issued",
+    normalizer=normalize_invoice_issued,
+    schema=InvoiceIssuedData,
+    required_fields=["issuer_name", "receiver_name", "invoice_number", "total_amount"],
+))
+register_document_type(DocumentTypeConfig(
+    document_type="bank_statement",
+    normalizer=normalize_bank_statement,
+    schema=BankStatementData,
+    required_fields=["bank_name", "period_start", "period_end"],
+))
+
+

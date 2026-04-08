@@ -14,6 +14,7 @@ from app.services.document_processor import (
     process_document,
     ProcessingResult,
     save_document,
+    DocumentDuplicateError,
 )
 
 
@@ -97,8 +98,8 @@ def test_extract_and_normalize_unknown_type_uses_generic(monkeypatch):
 
     doc_type, normalized, extracted = extract_and_normalize(b"x", "application/pdf")
 
-    assert doc_type == "tipo_desconocido"
-    assert normalized["custom_field"] == "valor"
+    # Unknown types are coerced to 'other' to always be a valid DocumentType.
+    assert doc_type == "other"
 
 
 def test_extract_and_normalize_propagates_gemini_error(monkeypatch):
@@ -243,13 +244,16 @@ def _patch_pipeline(monkeypatch, *, is_duplicate=False, gemini_raises=None, save
 
 
 def test_process_document_invalid_mime_raises_value_error(monkeypatch):
-    """MIME no soportado → ValueError antes de tocar Firestore o Gemini."""
+    """MIME no soportado → PipelineError(INVALID_MIME) antes de tocar Firestore o Gemini."""
+    from app.services.errors import PipelineError
     fake_db = MagicMock()
     monkeypatch.setattr(document_processor, "db", fake_db)
 
-    with pytest.raises(ValueError, match="no soportado"):
+    with pytest.raises(PipelineError) as exc_info:
         process_document(b"data", "application/zip", "file.zip", 4)
 
+    assert exc_info.value.code == "INVALID_MIME"
+    assert "no soportado" in exc_info.value.message
     fake_db.collection.assert_not_called()
 
 
@@ -282,8 +286,9 @@ def test_process_document_happy_path(monkeypatch):
 
 
 def test_process_document_race_condition_returns_duplicate(monkeypatch):
-    """ValueError de guardar_si_no_existe (race condition) → status=duplicate, no excepción."""
-    _patch_pipeline(monkeypatch, is_duplicate=False, save_raises=ValueError("Documento duplicado"))
+    """DocumentDuplicateError de guardar_si_no_existe (race condition) → status=duplicate."""
+    from app.services.firestore_client import DocumentDuplicateError
+    _patch_pipeline(monkeypatch, is_duplicate=False, save_raises=DocumentDuplicateError("Race condition duplicado"))
 
     result = process_document(b"pdf bytes", "application/pdf", "factura.pdf", 9)
 
