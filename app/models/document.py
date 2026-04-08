@@ -1,162 +1,132 @@
 from enum import Enum
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
-from datetime import date, datetime
+from typing import Optional, List
 
 
 class DocumentType(str, Enum):
     invoice_received = "invoice_received"
-    invoice_issued = "invoice_issued"
-    receipt = "receipt"
-    bank_statement = "bank_statement"
-    payroll = "payroll"
-    social_security_form = "social_security_form"
-    delivery_note = "delivery_note"
+    invoice_sent = "invoice_sent"
+    payment_receipt = "payment_receipt"
+    administrative_notice = "administrative_notice"
+    bank_document = "bank_document"
     contract = "contract"
-    tax_authority_communication = "tax_authority_communication"
+    expense_ticket = "expense_ticket"
     other = "other"
 
 
-class ExtractedData(BaseModel):
+# ---------------------------------------------------------------------------
+# Classification (Gemini phase 1)
+# ---------------------------------------------------------------------------
+
+class ClassificationResult(BaseModel):
+    document_type: DocumentType
+
+
+# ---------------------------------------------------------------------------
+# Extraction schemas (Gemini phase 2) — one per document type
+#
+# Cada schema es plano (sin Union/anyOf) para cumplir la restricción de
+# Gemini response_schema.  Todas las fechas son str para máxima
+# compatibilidad.  Los normalizadores convierten a date después.
+# ---------------------------------------------------------------------------
+
+class InvoiceReceivedExtraction(BaseModel):
     issuer_name: Optional[str] = None
-    issuer_tax_id: Optional[str] = None
+    issuer_nif: Optional[str] = None
     invoice_number: Optional[str] = None
     issue_date: Optional[str] = None
-    total_amount: Optional[float] = None
-    raw: Dict[str, Any] = Field(default_factory=dict)
-
-
-class TaxBreakdownItem(BaseModel):
-    rate: Optional[float] = None
-    base: Optional[float] = None
-    amount: Optional[float] = None
-
-
-class LineItem(BaseModel):
-    description: Optional[str] = None
-    quantity: Optional[float] = None
-    unit_price: Optional[float] = None
-    base: Optional[float] = None
+    base_amount: Optional[float] = None
+    tax_amount: Optional[float] = None
     tax_rate: Optional[float] = None
-    tax_amount: Optional[float] = None
-    total: Optional[float] = None
-
-
-class InvoiceReceivedData(BaseModel):
-    issuer_name: Optional[str] = None
-    issuer_tax_id: Optional[str] = None
-    invoice_number: Optional[str] = None
-    series: Optional[str] = None
-    issue_date: Optional[date] = None
-    due_date: Optional[date] = None
-    base_amount: Optional[float] = None
-    tax_amount: Optional[float] = None
-    total_amount: Optional[float] = None
-    currency: str = "EUR"
-    payment_method: Optional[str] = None
-    tax_breakdown: List[TaxBreakdownItem] = Field(default_factory=list)
-    line_items: List[LineItem] = Field(default_factory=list)
-    confidence_score: Optional[float] = None
-
-
-class InvoiceIssuedData(BaseModel):
-    receiver_name: Optional[str] = None
-    receiver_tax_id: Optional[str] = None
-    issuer_name: Optional[str] = None
-    issuer_tax_id: Optional[str] = None
-    invoice_number: Optional[str] = None
-    series: Optional[str] = None
-    issue_date: Optional[date] = None
-    due_date: Optional[date] = None
-    base_amount: Optional[float] = None
-    tax_amount: Optional[float] = None
-    total_amount: Optional[float] = None
-    currency: str = "EUR"
-    payment_method: Optional[str] = None
-    tax_breakdown: List[TaxBreakdownItem] = Field(default_factory=list)
-    line_items: List[LineItem] = Field(default_factory=list)
-    confidence_score: Optional[float] = None
-
-
-class BankTransaction(BaseModel):
-    date: Optional[str] = None        # str para compatibilidad con Gemini
-    description: Optional[str] = None
-    amount: Optional[float] = None
-    type: Optional[str] = None  # "credit" o "debit"
-    balance: Optional[float] = None
-    reference: Optional[str] = None
-    counterparty: Optional[str] = None
-
-
-class BankStatementData(BaseModel):
-    bank_name: Optional[str] = None
-    account_holder: Optional[str] = None
-    iban: Optional[str] = None
-    currency: str = "EUR"
-    period_start: Optional[date] = None
-    period_end: Optional[date] = None
-    opening_balance: Optional[float] = None
-    closing_balance: Optional[float] = None
-    transactions: List[BankTransaction] = Field(default_factory=list)
-
-
-class GeminiExtractionSchema(BaseModel):
-    """
-    Schema plano usado como ``response_schema`` en la API de Gemini.
-
-    IMPORTANTE — restricción de diseño:
-    Esta clase DEBE permanecer plana (sin Union, sin discriminadores).
-    Gemini no soporta tipos discriminados en ``response_schema``; si se
-    intenta usar un modelo con campos Union o anyOf, la llamada falla.
-
-    Todos los campos son opcionales; Gemini solo rellena los que aplican
-    al tipo de documento detectado.  Los modelos específicos por tipo
-    (``InvoiceReceivedData``, ``InvoiceIssuedData``, ``BankStatementData``)
-    son los esquemas de *salida normalizada* — una capa distinta.
-    """
-    # --- Campos comunes a facturas (invoice_received / invoice_issued) ---
-    issuer_name: Optional[str] = None
-    issuer_tax_id: Optional[str] = None
-    receiver_name: Optional[str] = None
-    receiver_tax_id: Optional[str] = None
-    invoice_number: Optional[str] = None
-    series: Optional[str] = None
-    issue_date: Optional[str] = None       # str para máxima compatibilidad con Gemini
-    due_date: Optional[str] = None
-    base_amount: Optional[float] = None
-    tax_amount: Optional[float] = None
     total_amount: Optional[float] = None
     currency: Optional[str] = None
+    concept: Optional[str] = None
+    billing_period_start: Optional[str] = None
+    billing_period_end: Optional[str] = None
     payment_method: Optional[str] = None
-    tax_breakdown: List[TaxBreakdownItem] = Field(default_factory=list)
-    line_items: List[LineItem] = Field(default_factory=list)
-    confidence_score: Optional[float] = None
-    # --- Campos de bank_statement ---
-    bank_name: Optional[str] = None
-    account_holder: Optional[str] = None
+    document_source: Optional[str] = None
+
+
+class InvoiceSentExtraction(BaseModel):
+    issuer_name: Optional[str] = None
+    issuer_nif: Optional[str] = None
+    client_name: Optional[str] = None
+    client_nif: Optional[str] = None
+    invoice_number: Optional[str] = None
+    issue_date: Optional[str] = None
+    base_amount: Optional[float] = None
+    tax_amount: Optional[float] = None
+    tax_rate: Optional[float] = None
+    irpf_amount: Optional[float] = None
+    total_amount: Optional[float] = None
+    currency: Optional[str] = None
+    payment_status: Optional[str] = None
+    payment_method: Optional[str] = None
+    document_source: Optional[str] = None
+
+
+class PaymentReceiptExtraction(BaseModel):
+    payment_date: Optional[str] = None
+    amount: Optional[float] = None
+    currency: Optional[str] = None
+    payment_method: Optional[str] = None
+    operation_reference: Optional[str] = None
+    issuer_entity: Optional[str] = None
+    card_last_digits: Optional[str] = None
     iban: Optional[str] = None
-    period_start: Optional[str] = None    # str para máxima compatibilidad con Gemini
-    period_end: Optional[str] = None
-    opening_balance: Optional[float] = None
-    closing_balance: Optional[float] = None
-    transactions: List[BankTransaction] = Field(default_factory=list)
+    document_source: Optional[str] = None
+
+
+class AdministrativeNoticeExtraction(BaseModel):
+    issuer_entity: Optional[str] = None
+    notice_type: Optional[str] = None
+    issue_date: Optional[str] = None
+    deadline: Optional[str] = None
+    expedient_number: Optional[str] = None
+    summary: Optional[str] = None
+    has_signed_pdf: Optional[bool] = None
+    document_source: Optional[str] = None
+
+
+class Movement(BaseModel):
+    date: Optional[str] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    balance_after: Optional[float] = None
+
+
+class BankDocumentExtraction(BaseModel):
+    bank_name: Optional[str] = None
+    document_date: Optional[str] = None
+    iban: Optional[str] = None
+    movements: List[Movement] = Field(default_factory=list)
+    document_source: Optional[str] = None
+
+
+class ContractParty(BaseModel):
+    name: Optional[str] = None
+    nif: Optional[str] = None
+
+
+class ContractExtraction(BaseModel):
+    parties: List[ContractParty] = Field(default_factory=list)
+    contract_date: Optional[str] = None
+    subject: Optional[str] = None
+    duration: Optional[str] = None
+    economic_terms: Optional[str] = None
+    signed: Optional[bool] = None
+    document_source: Optional[str] = None
+
+
+class ExpenseTicketExtraction(BaseModel):
+    issuer_name: Optional[str] = None
+    issue_date: Optional[str] = None
+    total_amount: Optional[float] = None
+    currency: Optional[str] = None
+    vat_included: Optional[bool] = None
+    concept: Optional[str] = None
+    payment_method: Optional[str] = None
+    document_source: Optional[str] = None
 
 
 
-
-
-class DocumentoExtraido(BaseModel):
-    document_type: DocumentType
-    # ``data`` uses the flat GeminiExtractionSchema intentionally — see that class's docstring.
-    data: GeminiExtractionSchema = Field(default_factory=GeminiExtractionSchema)
-
-
-class DocumentoNormalizado(BaseModel):
-    id: str
-    file_name: str
-    file_size: int
-    document_hash: str
-    document_type: DocumentType
-    extracted_data: ExtractedData
-    normalized_data: Dict[str, Any]
-    created_at: datetime

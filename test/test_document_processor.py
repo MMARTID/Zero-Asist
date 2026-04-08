@@ -68,17 +68,14 @@ def test_is_document_duplicate_returns_true_when_found(monkeypatch):
 
 def test_extract_and_normalize_happy_path(monkeypatch):
     """extract_and_normalize returns the processed triple."""
-    def fake_extract(file_bytes, mime_type):
-        return {
-            "document_type": "invoice_received",
-            "data": {
-                "issuer_name": "Empresa SL",
-                "issue_date": "2024-01-15",
-                "total_amount": 121.0,
-            },
-        }
-
-    monkeypatch.setattr(document_processor, "extract_from_file", fake_extract)
+    monkeypatch.setattr(document_processor, "classify_document",
+                        lambda fb, mt: "invoice_received")
+    monkeypatch.setattr(document_processor, "extract_document",
+                        lambda fb, mt, dt: {
+                            "issuer_name": "Empresa SL",
+                            "issue_date": "2024-01-15",
+                            "total_amount": 121.0,
+                        })
 
     doc_type, normalized, extracted = extract_and_normalize(b"fake pdf", "application/pdf")
 
@@ -91,45 +88,38 @@ def test_extract_and_normalize_happy_path(monkeypatch):
 
 
 def test_extract_and_normalize_unknown_type_uses_generic(monkeypatch):
-    def fake_extract(file_bytes, mime_type):
-        return {"document_type": "tipo_desconocido", "data": {"custom_field": "valor"}}
-
-    monkeypatch.setattr(document_processor, "extract_from_file", fake_extract)
+    monkeypatch.setattr(document_processor, "classify_document",
+                        lambda fb, mt: "tipo_desconocido")
 
     doc_type, normalized, extracted = extract_and_normalize(b"x", "application/pdf")
 
     # Unknown types are coerced to 'other' to always be a valid DocumentType.
     assert doc_type == "other"
+    # No extraction schema for 'other' → empty extracted data
+    assert extracted == {}
 
 
 def test_extract_and_normalize_propagates_gemini_error(monkeypatch):
-    def fake_extract(file_bytes, mime_type):
-        raise RuntimeError("Gemini unavailable")
-
-    monkeypatch.setattr(document_processor, "extract_from_file", fake_extract)
+    monkeypatch.setattr(document_processor, "classify_document",
+                        MagicMock(side_effect=RuntimeError("Gemini unavailable")))
 
     with pytest.raises(RuntimeError, match="Gemini unavailable"):
         extract_and_normalize(b"x", "application/pdf")
 
 
-def test_extract_and_normalize_bank_statement_dates(monkeypatch):
-    """Date fields in bank_statement are converted to datetime for Firestore."""
-    def fake_extract(file_bytes, mime_type):
-        return {
-            "document_type": "bank_statement",
-            "data": {
-                "bank_name": "Banco Test",
-                "period_start": "2024-01-01",
-                "period_end": "2024-01-31",
-            },
-        }
-
-    monkeypatch.setattr(document_processor, "extract_from_file", fake_extract)
+def test_extract_and_normalize_bank_document_dates(monkeypatch):
+    """Date fields in bank_document are converted to datetime for Firestore."""
+    monkeypatch.setattr(document_processor, "classify_document",
+                        lambda fb, mt: "bank_document")
+    monkeypatch.setattr(document_processor, "extract_document",
+                        lambda fb, mt, dt: {
+                            "bank_name": "Banco Test",
+                            "document_date": "2024-01-15",
+                        })
 
     _, normalized, _ = extract_and_normalize(b"x", "application/pdf")
 
-    assert isinstance(normalized["period_start"], datetime)
-    assert isinstance(normalized["period_end"], datetime)
+    assert isinstance(normalized["document_date"], datetime)
 
 
 # ---------------------------------------------------------------------------
@@ -230,12 +220,12 @@ def _patch_pipeline(monkeypatch, *, is_duplicate=False, gemini_raises=None, save
     monkeypatch.setattr(document_processor, "db", fake_db)
 
     if gemini_raises:
-        monkeypatch.setattr(document_processor, "extract_from_file", MagicMock(side_effect=gemini_raises))
+        monkeypatch.setattr(document_processor, "classify_document", MagicMock(side_effect=gemini_raises))
     else:
-        monkeypatch.setattr(document_processor, "extract_from_file", MagicMock(return_value={
-            "document_type": "invoice_received",
-            "data": {"issuer_name": "Empresa SL", "total_amount": 121.0},
-        }))
+        monkeypatch.setattr(document_processor, "classify_document",
+                            MagicMock(return_value="invoice_received"))
+        monkeypatch.setattr(document_processor, "extract_document",
+                            MagicMock(return_value={"issuer_name": "Empresa SL", "total_amount": 121.0}))
 
     if save_raises:
         monkeypatch.setattr(document_processor, "guardar_si_no_existe", MagicMock(side_effect=save_raises))
@@ -259,9 +249,9 @@ def test_process_document_invalid_mime_raises_value_error(monkeypatch):
 
 def test_process_document_returns_duplicate_on_existing_hash(monkeypatch):
     """Documento ya existe → status=duplicate sin llamar a Gemini."""
-    extract_mock = MagicMock()
+    classify_mock = MagicMock()
     _patch_pipeline(monkeypatch, is_duplicate=True)
-    monkeypatch.setattr(document_processor, "extract_from_file", extract_mock)
+    monkeypatch.setattr(document_processor, "classify_document", classify_mock)
 
     result = process_document(b"pdf bytes", "application/pdf", "factura.pdf", 9)
 
@@ -269,7 +259,7 @@ def test_process_document_returns_duplicate_on_existing_hash(monkeypatch):
     assert result.doc_hash == hashlib.sha256(b"pdf bytes").hexdigest()
     assert result.document_type is None
     assert result.normalized_data is None
-    extract_mock.assert_not_called()
+    classify_mock.assert_not_called()
 
 
 def test_process_document_happy_path(monkeypatch):

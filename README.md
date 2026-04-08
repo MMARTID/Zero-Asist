@@ -106,8 +106,7 @@ Zero-Asist/
 ├── app/
 │   ├── main.py                    # FastAPI: endpoints /procesar-documento y /poll-gmail
 │   ├── collectors/
-│   │   ├── gmail_client.py        # Autenticación OAuth2 con Gmail
-│   │   ├── gmail_service.py       # Inicialización del servicio Gmail
+│   │   ├── gmail_service.py       # Autenticación OAuth2 e inicialización del servicio Gmail
 │   │   ├── gmail_reader.py        # Filtros Capa 1 y 2 + descarga de adjuntos
 │   │   └── gmail_poller.py        # Orquestador principal del flujo Gmail
 │   ├── ingestion/

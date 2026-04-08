@@ -14,6 +14,85 @@ from app.services.firestore_client import (
 
 logger = logging.getLogger(__name__)
 
+
+def _process_attachment(
+    attachment: dict, msg_id: str, subject: str, from_addr: str,
+) -> tuple[str, dict]:
+    """Process a single attachment and return (category, summary_entry).
+
+    *category* is one of ``"procesados"``, ``"duplicados"`` or ``"errores"``.
+    """
+    filename = attachment["filename"]
+    mime_type = attachment["mime_type"]
+    data = attachment["data"]
+
+    try:
+        result = process_document(
+            file_bytes=data,
+            mime_type=mime_type,
+            filename=filename,
+            file_size=len(data),
+            extra={
+                "source": "gmail",
+                "gmail_message_id": msg_id,
+                "gmail_subject": subject,
+                "gmail_from": from_addr,
+            },
+        )
+    except PipelineError as e:
+        logger.error("❌ Error procesando %s: %s", filename, e)
+        return "errores", {
+            "file_name": filename,
+            "gmail_message_id": msg_id,
+            "error_code": e.code,
+            "error_message": e.message,
+        }
+    except Exception as e:
+        pipeline_err = PipelineError.from_exception(e)
+        logger.exception("❌ Error inesperado procesando %s: %s", filename, e)
+        return "errores", {
+            "file_name": filename,
+            "gmail_message_id": msg_id,
+            "error_code": pipeline_err.code,
+            "error_message": pipeline_err.message,
+        }
+
+    if result.status == "duplicate":
+        logger.info(f"🔁 Duplicado, ignorado: {filename}")
+        return "duplicados", {
+            "file_name": filename,
+            "document_hash": result.doc_hash,
+            "gmail_message_id": msg_id,
+            "gmail_subject": subject,
+        }
+
+    logger.info(f"✅ Guardado: {filename} ({result.document_type})")
+    return "procesados", {
+        "document_hash": result.doc_hash,
+        "file_name": filename,
+        "document_type": result.document_type,
+        "normalized_data": result.normalized_data,
+    }
+
+
+def _derive_message_status(
+    categories: list[str],
+) -> tuple[str, str | None]:
+    """Derive the final message status and error reason from attachment outcomes.
+
+    Returns ``(status, reason)`` where *reason* is only set for ``"error"`` status.
+    """
+    has_processed = "procesados" in categories
+    has_error = "errores" in categories
+
+    if has_processed:
+        return "processed", None
+    if not has_error:
+        # All duplicates (no errors, no processed)
+        return "duplicate", None
+    return "error", None
+
+
 def poll_gmail(
     query: str = "has:attachment (filename:pdf OR filename:xml OR filename:jpg OR filename:png)",
     max_results: int = 10,
@@ -85,93 +164,25 @@ def poll_gmail(
 
         logger.info(f"📎 {len(attachments)} adjunto/s encontrado/s en: '{subject}'")
 
-        msg_hashes: list = []
-        msg_has_processed = False
-        msg_has_duplicate = False
-        msg_has_error = False
-        msg_error_reason: str | None = None
+        categories: list[str] = []
+        msg_hashes: list[str] = []
+        error_reason: str | None = None
 
         for attachment in attachments:
-            filename = attachment["filename"]
-            mime_type = attachment["mime_type"]
-            data = attachment["data"]
+            category, entry = _process_attachment(attachment, msg_id, subject, from_addr)
+            summary[category].append(entry)
+            categories.append(category)
+            if doc_hash := entry.get("document_hash"):
+                msg_hashes.append(doc_hash)
+            if category == "errores" and (code := entry.get("error_code")):
+                if error_reason is None or code != "UNKNOWN":
+                    error_reason = code
 
-            try:
-                result = process_document(
-                    file_bytes=data,
-                    mime_type=mime_type,
-                    filename=filename,
-                    file_size=len(data),
-                    extra={
-                        "source": "gmail",
-                        "gmail_message_id": msg_id,
-                        "gmail_subject": subject,
-                        "gmail_from": from_addr,
-                    },
-                )
-            except PipelineError as e:
-                logger.error("❌ Error procesando %s: %s", filename, e)
-                summary["errores"].append({
-                    "file_name": filename,
-                    "gmail_message_id": msg_id,
-                    "error_code": e.code,
-                    "error_message": e.message,
-                })
-                msg_has_error = True
-                # Keep the most-severe code seen so far (UNAVAILABLE > RATE_LIMIT > … > UNKNOWN)
-                if msg_error_reason is None or e.code != "UNKNOWN":
-                    msg_error_reason = e.code
-                continue
-            except Exception as e:
-                # Unexpected exception not already wrapped — wrap it now so
-                # nothing raw ever reaches Firestore.
-                pipeline_err = PipelineError.from_exception(e)
-                logger.exception("❌ Error inesperado procesando %s: %s", filename, e)
-                summary["errores"].append({
-                    "file_name": filename,
-                    "gmail_message_id": msg_id,
-                    "error_code": pipeline_err.code,
-                    "error_message": pipeline_err.message,
-                })
-                msg_has_error = True
-                if msg_error_reason is None or pipeline_err.code != "UNKNOWN":
-                    msg_error_reason = pipeline_err.code
-                continue
-
-            if result.status == "duplicate":
-                logger.info(f"🔁 Duplicado, ignorado: {filename}")
-                summary["duplicados"].append({
-                    "file_name": filename,
-                    "document_hash": result.doc_hash,
-                    "gmail_message_id": msg_id,
-                    "gmail_subject": subject,
-                })
-                msg_hashes.append(result.doc_hash)
-                msg_has_duplicate = True
-            else:
-                logger.info(f"✅ Guardado: {filename} ({result.document_type})")
-                summary["procesados"].append({
-                    "document_hash": result.doc_hash,
-                    "file_name": filename,
-                    "document_type": result.document_type,
-                    "normalized_data": result.normalized_data,
-                })
-                msg_hashes.append(result.doc_hash)
-                msg_has_processed = True
-
-        # Determine final status for this message after all its attachments.
-        if msg_has_error and not msg_has_processed:
-            final_status = "error"
-        elif msg_has_processed:
-            final_status = "processed"
-        elif msg_has_duplicate:
-            final_status = "duplicate"
-        else:
-            final_status = "error"
+        final_status, _ = _derive_message_status(categories)
 
         mark_message_processed(
             msg_id, final_status, subject,
-            reason=msg_error_reason if final_status == "error" else None,
+            reason=error_reason if final_status == "error" else None,
             document_hashes=msg_hashes,
             thread_id=thread_id,
             from_addr=from_addr,

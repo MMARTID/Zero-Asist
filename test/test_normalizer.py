@@ -7,16 +7,15 @@ from app.ingestion.normalizer import (
     normalize_number,
     normalize_document,
     normalize_document_with_report,
-    register_normalizer,
     _normalize_currency,
     _normalize_company_name,
     _split_invoice_series,
     _detect_payment_method,
-    _propagate_tax_from_breakdown,
     _cross_check_arithmetic,
     _check_type_coherence,
     NormalizationContext,
 )
+from app.models.registry import DocumentTypeConfig, register_document_type
 
 
 # ---------------------------------------------------------------------------
@@ -77,8 +76,7 @@ def test_normalize_document_invoice_received():
         "tax_amount": "21.10",
         "total_amount": "121.60",
         "currency": None,
-        "tax_breakdown": [{"rate": "21", "base": "100,50", "amount": "21.10"}],
-        "line_items": [{"description": "Producto", "quantity": "1", "unit_price": "100,50"}],
+        "concept": "Servicios enero",
     }
     result = normalize_document(raw, "invoice_received")
 
@@ -86,45 +84,39 @@ def test_normalize_document_invoice_received():
     assert result["issue_date"] == date(2024, 1, 10)
     assert result["base_amount"] == pytest.approx(100.50)
     assert result["currency"] == "EUR"    # fallback cuando currency=None
-    assert len(result["tax_breakdown"]) == 1
-    assert result["tax_breakdown"][0]["rate"] == pytest.approx(21.0)
-    assert len(result["line_items"]) == 1
+    assert result["concept"] == "Servicios enero"
 
 
-def test_normalize_document_invoice_issued():
+def test_normalize_document_invoice_sent():
     raw = {
-        "receiver_name": "Cliente SA",
+        "client_name": "Cliente SA",
         "issuer_name": "Proveedor SL",
         "total_amount": 500,
         "currency": "USD",
     }
-    result = normalize_document(raw, "invoice_issued")
+    result = normalize_document(raw, "invoice_sent")
 
-    assert result["receiver_name"] == "Cliente SA"
+    assert result["client_name"] == "Cliente SA"
     assert result["issuer_name"] == "Proveedor SL"
     assert result["total_amount"] == pytest.approx(500.0)
     assert result["currency"] == "USD"
 
 
-def test_normalize_document_bank_statement():
+def test_normalize_document_bank_document():
     raw = {
         "bank_name": "Banco Test",
         "iban": "ES00 0000 0000 0000 0000 0000",
-        "period_start": "2024-01-01",
-        "period_end": "2024-01-31",
-        "opening_balance": "1000",
-        "closing_balance": "1200",
-        "transactions": [
-            {"date": "2024-01-15", "description": "Pago", "amount": "200", "type": "credit"},
+        "document_date": "2024-01-15",
+        "movements": [
+            {"date": "2024-01-15", "description": "Pago", "amount": "200", "balance_after": "1200"},
         ],
     }
-    result = normalize_document(raw, "bank_statement")
+    result = normalize_document(raw, "bank_document")
 
     assert result["bank_name"] == "Banco Test"
-    assert result["period_start"] == date(2024, 1, 1)
-    assert result["opening_balance"] == pytest.approx(1000.0)
-    assert len(result["transactions"]) == 1
-    assert result["transactions"][0]["amount"] == pytest.approx(200.0)
+    assert result["document_date"] == date(2024, 1, 15)
+    assert len(result["movements"]) == 1
+    assert result["movements"][0]["amount"] == pytest.approx(200.0)
 
 
 def test_normalize_document_other_devuelve_raw():
@@ -145,10 +137,9 @@ def test_normalize_document_tipo_desconocido_usa_generic():
 # ---------------------------------------------------------------------------
 
 def test_normalize_document_listas_vacias():
-    raw = {"tax_breakdown": [], "line_items": None}
+    raw = {"concept": None}
     result = normalize_document(raw, "invoice_received")
-    assert result["tax_breakdown"] == []
-    assert result["line_items"] == []
+    assert result["concept"] is None
 
 
 def test_normalize_document_campos_nulos():
@@ -172,20 +163,18 @@ def test_dates_to_firestore_converts_date_fields():
     normalized = {
         "issuer_name": "SL",
         "issue_date": date(2024, 3, 15),
-        "due_date": date(2024, 4, 1),
-        "period_start": None,
-        "period_end": None,
+        "billing_period_start": date(2024, 3, 1),
+        "billing_period_end": None,
         "total_amount": 100.0,
     }
     result = dates_to_firestore(normalized)
 
     assert isinstance(result["issue_date"], datetime)
     assert result["issue_date"] == datetime(2024, 3, 15, 0, 0, 0)
-    assert isinstance(result["due_date"], datetime)
-    assert result["due_date"] == datetime(2024, 4, 1, 0, 0, 0)
+    assert isinstance(result["billing_period_start"], datetime)
+    assert result["billing_period_start"] == datetime(2024, 3, 1, 0, 0, 0)
     # None fields are left as None
-    assert result["period_start"] is None
-    assert result["period_end"] is None
+    assert result["billing_period_end"] is None
     # Non-date fields are untouched
     assert result["issuer_name"] == "SL"
     assert result["total_amount"] == 100.0
@@ -266,7 +255,7 @@ def test_registry_supports_custom_normalizer():
     def custom_normalizer(data, _ctx=None):
         return {"custom": True, "input": data.get("x")}
 
-    register_normalizer("custom_doc", custom_normalizer)
+    register_document_type(DocumentTypeConfig(document_type="custom_doc", normalizer=custom_normalizer))
     result = normalize_document({"x": "ok"}, "custom_doc")
     assert result == {"custom": True, "input": "ok"}
 
@@ -358,34 +347,6 @@ def test_detect_payment_method_prefers_longest_keyword():
 
 
 # ---------------------------------------------------------------------------
-# _propagate_tax_from_breakdown
-# ---------------------------------------------------------------------------
-
-def test_propagate_tax_single_rate():
-    ctx = NormalizationContext()
-    items = [{"description": "A", "tax_rate": None}, {"description": "B", "tax_rate": None}]
-    breakdown = [{"rate": 21.0, "base": 100.0, "amount": 21.0}]
-    result = _propagate_tax_from_breakdown(items, breakdown, ctx)
-    assert all(item["tax_rate"] == 21.0 for item in result)
-
-
-def test_propagate_tax_skips_multiple_rates():
-    ctx = NormalizationContext()
-    items = [{"description": "A", "tax_rate": None}]
-    breakdown = [{"rate": 21.0, "base": 80.0, "amount": 16.8}, {"rate": 10.0, "base": 20.0, "amount": 2.0}]
-    result = _propagate_tax_from_breakdown(items, breakdown, ctx)
-    assert result[0]["tax_rate"] is None
-
-
-def test_propagate_tax_preserves_existing():
-    ctx = NormalizationContext()
-    items = [{"description": "A", "tax_rate": 10.0}]
-    breakdown = [{"rate": 21.0, "base": 100.0, "amount": 21.0}]
-    result = _propagate_tax_from_breakdown(items, breakdown, ctx)
-    assert result[0]["tax_rate"] == 10.0  # not overwritten
-
-
-# ---------------------------------------------------------------------------
 # _cross_check_arithmetic
 # ---------------------------------------------------------------------------
 
@@ -401,18 +362,6 @@ def test_cross_check_arithmetic_mismatch():
     normalized = {"base_amount": 100.0, "tax_amount": 21.0, "total_amount": 200.0}
     _cross_check_arithmetic(normalized, ctx)
     assert any("arithmetic_mismatch" in issue.reason for issue in ctx.issues)
-
-
-def test_cross_check_arithmetic_line_items_mismatch():
-    ctx = NormalizationContext()
-    normalized = {
-        "base_amount": 100.0,
-        "tax_amount": 21.0,
-        "total_amount": 121.0,
-        "line_items": [{"base": 50.0}, {"base": 30.0}],  # sum=80 != base=100
-    }
-    _cross_check_arithmetic(normalized, ctx)
-    assert any("line_items_sum_mismatch" in issue.reason for issue in ctx.issues)
 
 
 def test_cross_check_arithmetic_skips_when_null():
@@ -448,10 +397,10 @@ def test_type_coherence_invoice_lacks_fields():
     assert any("type_coherence" in issue.reason for issue in ctx.issues)
 
 
-def test_type_coherence_bank_statement_with_invoice_number():
+def test_type_coherence_bank_document_with_invoice_number():
     ctx = NormalizationContext()
     normalized = {"invoice_number": "F-001", "bank_name": "BBVA"}
-    _check_type_coherence(normalized, "bank_statement", ctx)
+    _check_type_coherence(normalized, "bank_document", ctx)
     assert any("type_coherence" in issue.reason for issue in ctx.issues)
 
 
@@ -463,36 +412,6 @@ def test_invoice_currency_symbol_normalized():
     raw = {"currency": "€", "total_amount": "100"}
     result = normalize_document(raw, "invoice_received")
     assert result["currency"] == "EUR"
-
-
-def test_invoice_series_auto_split():
-    raw = {"invoice_number": "FRA-00123", "total_amount": "100"}
-    result = normalize_document(raw, "invoice_received")
-    assert result["series"] == "FRA"
-    assert result["invoice_number"] == "00123"
-
-
-def test_invoice_payment_method_detected_from_notes():
-    raw = {
-        "issuer_name": "Acme",
-        "payment_method": None,
-        "notes": "Pago mediante transferencia bancaria",
-        "total_amount": "100",
-    }
-    result = normalize_document(raw, "invoice_received")
-    assert result["payment_method"] == "transfer"
-
-
-def test_invoice_line_items_tax_propagated():
-    raw = {
-        "total_amount": "121",
-        "tax_breakdown": [{"rate": "21", "base": "100", "amount": "21"}],
-        "line_items": [
-            {"description": "Widget", "quantity": "2", "unit_price": "50"},
-        ],
-    }
-    result = normalize_document(raw, "invoice_received")
-    assert result["line_items"][0]["tax_rate"] == pytest.approx(21.0)
 
 
 def test_invoice_company_name_all_caps_normalized():

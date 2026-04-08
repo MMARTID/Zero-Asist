@@ -20,12 +20,6 @@ def guardar_si_no_existe(transaction, coleccion: str, doc_hash: str, data: dict)
         raise DocumentDuplicateError(f"Documento duplicado: {doc_hash}")
     transaction.set(ref, data)
 
-def guardar_documento(coleccion: str, doc_id: str, data: dict):
-    doc_ref = db.collection(coleccion).document(doc_id)
-    doc_ref.set(data)
-    return doc_id
-
-
 def is_message_processed(msg_id: str, include_errors: bool = False) -> bool:
     """Devuelve True si msg_id ya existe en gmail_processed.
     Si include_errors=False (default), los mensajes con status='error' se consideran

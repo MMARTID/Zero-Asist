@@ -34,6 +34,8 @@ class DocumentTypeConfig:
     normalizer: Callable[[Dict[str, Any], Any], Dict[str, Any]]
     schema: type | None = None
     required_fields: list[str] = field(default_factory=list)
+    extraction_schema: type | None = None
+    prompt: str = ""
 
 
 # ---------------------------------------------------------------------------
