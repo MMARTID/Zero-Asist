@@ -87,6 +87,8 @@ def _derive_message_status(
 
     if has_error:
         return "error", None
+    if has_error:
+        return "error", None
     if has_processed:
         return "processed", None
     if not has_error:
