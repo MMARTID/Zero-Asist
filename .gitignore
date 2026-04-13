@@ -1,16 +1,30 @@
-#environment variables
+# ── Entorno ──────────────────────────────────────────────────────
 .env
-#Python cache files
+.env.*
+.env.local
+
+# ── Python ───────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-#Virtual environment
+.venv/
 venv/
-#IDE files
+.pytest_cache/
+
+# ── Node.js ──────────────────────────────────────────────────────
+node_modules/
+.next/
+npm-debug.log*
+
+# ── IDE ──────────────────────────────────────────────────────────
 .idea/
 .vscode/
 
-app/collectors/token.json
-app/collectors/credentials.json
+# ── OS ───────────────────────────────────────────────────────────
 .DS_Store
+
+# ── Secretos / credenciales ──────────────────────────────────────
+backend/app/collectors/token.json
+backend/app/collectors/credentials.json
+backend/oauth_client_config.json

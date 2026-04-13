@@ -1,0 +1,14 @@
+.env
+.env.*
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+tests/
+.flake8
+.git
+.gitignore
+README.md
+pytest.ini
+oauth_client_config.json

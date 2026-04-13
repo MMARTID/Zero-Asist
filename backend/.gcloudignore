@@ -1,0 +1,24 @@
+# Archivos de entorno y secretos
+.env
+.env.*
+
+# Dependencias Python locales
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+
+# Tests y herramientas de desarrollo
+.pytest_cache
+tests/
+
+# Control de versiones y metadatos
+.git
+.flake8
+pytest.ini
+oauth_client_config.json
+.gitignore
+.dockerignore
+README.md
+pytest.ini
