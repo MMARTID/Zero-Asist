@@ -7,7 +7,6 @@ from app.ingestion.constants import (
     ADDITIVE_TAX_TYPES,
     ARITHMETIC_TOLERANCE_MIN,
     ARITHMETIC_TOLERANCE_RATIO,
-    RANGE_RULES,
     RE_IVA_PAIRS,
     RETENTION_TAX_TYPES,
     SPANISH_TAX_RATES,
@@ -25,20 +24,6 @@ def _validate_required_fields(normalized: Dict[str, Any], document_type: str, ct
         if normalized.get(field_name) in (None, "", []):
             ctx.add_issue(field_name, "required_field_missing", "missing")
             ctx.record(field_name, None, normalized.get(field_name), "required_field_check", "missing")
-
-
-def _validate_ranges(normalized: Dict[str, Any], ctx: NormalizationContext) -> None:
-    for field_name, (min_value, max_value) in RANGE_RULES.items():
-        value = normalized.get(field_name)
-        if value is None:
-            continue
-        if not isinstance(value, (int, float)):
-            ctx.add_issue(field_name, "range_check_non_numeric", "invalid", value=value)
-            ctx.record(field_name, value, value, "range_check", "invalid")
-            continue
-        if value < min_value or value > max_value:
-            ctx.add_issue(field_name, f"out_of_range[{min_value},{max_value}]", "invalid", value=value)
-            ctx.record(field_name, value, value, "range_check", "invalid")
 
 
 def _validate_schema(normalized: Dict[str, Any], document_type: str, ctx: NormalizationContext) -> None:
@@ -198,7 +183,6 @@ def _check_type_coherence(
 
 def _finalize_validation(document_type: str, normalized: Dict[str, Any], ctx: NormalizationContext) -> None:
     _validate_required_fields(normalized, document_type, ctx)
-    _validate_ranges(normalized, ctx)
     _validate_schema(normalized, document_type, ctx)
     _cross_check_arithmetic(normalized, ctx)
     _validate_tax_lines(normalized, ctx)

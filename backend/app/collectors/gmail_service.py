@@ -51,6 +51,7 @@ def _load_or_refresh_creds() -> Credentials:
 
         with open(TOKEN_PATH, "w") as token:
             token.write(creds.to_json())
+        os.chmod(TOKEN_PATH, 0o600)
 
     return creds
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, UploadFile, File
 
@@ -17,12 +18,19 @@ _EXT_MIME = {
     "xml": "application/xml",
 }
 
+_MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+
 
 @router.post("/procesar-documento")
 async def procesar_documento(file: UploadFile = File(...)):
     contenido = await file.read()
     if not contenido:
         raise HTTPException(status_code=400, detail="Archivo vacío")
+    if len(contenido) > _MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Archivo demasiado grande ({len(contenido)} bytes). Máximo: {_MAX_FILE_SIZE} bytes",
+        )
 
     mime_type = file.content_type or ""
     if not mime_type:
@@ -32,7 +40,8 @@ async def procesar_documento(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail=f"Extensión no soportada: {ext}")
 
     try:
-        result = process_document(
+        result = await asyncio.to_thread(
+            process_document,
             file_bytes=contenido,
             mime_type=mime_type,
             filename=file.filename,

@@ -18,6 +18,7 @@ RUN pip install --upgrade pip setuptools wheel && \
 
 # Copiar código de la aplicación
 COPY app/ app/
+COPY oauth_client_config.json .
 
 # Cloud Run usa 8080
 EXPOSE 8080

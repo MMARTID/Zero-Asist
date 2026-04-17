@@ -10,23 +10,13 @@ This module is a *dependency*, not a router — it is consumed by
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from fastapi import Depends, HTTPException, Request
 from google.cloud import firestore
 
+from app.api.deps import get_db as _get_db
+
 logger = logging.getLogger(__name__)
-
-# Lazy Firestore client
-_db: Optional[firestore.Client] = None
-
-
-def _get_db() -> firestore.Client:
-    global _db
-    if _db is None:
-        from app.services.firestore_client import db
-        _db = db
-    return _db
 
 
 def _verify_firebase_token(request: Request) -> dict:
@@ -86,22 +76,34 @@ def get_current_gestoria(
         raise HTTPException(status_code=403, detail="Token missing uid")
 
     db = _get_db()
-    doc = db.collection("usuarios").document(uid).get()
+    usuario_ref = db.collection("usuarios").document(uid)
+    doc = usuario_ref.get()
     if not doc.exists:
-        # Auto-register: create a new gestoría for this user
+        # Auto-register: create a new gestoría for this user using a transaction
+        # to avoid race conditions (duplicate gestorías on concurrent requests).
         gestoria_ref = db.collection("gestorias").document()
-        gestoria_ref.set({
-            "nombre": claims.get("name", "Mi Gestoría"),
-            "email": claims.get("email", ""),
-            "owner_uid": uid,
-        })
-        db.collection("usuarios").document(uid).set({
-            "gestoria_id": gestoria_ref.id,
-            "email": claims.get("email", ""),
-            "nombre": claims.get("name", ""),
-        })
-        logger.info("Auto-registered new gestoría %s for user %s", gestoria_ref.id, uid)
-        return gestoria_ref.id
+
+        @firestore.transactional
+        def _register(transaction: firestore.Transaction) -> str:
+            snap = usuario_ref.get(transaction=transaction)
+            if snap.exists:
+                return snap.to_dict().get("gestoria_id", "")
+            transaction.set(gestoria_ref, {
+                "nombre": claims.get("name", "Mi Gestoría"),
+                "email": claims.get("email", ""),
+                "owner_uid": uid,
+                "onboarding_complete": False,
+            })
+            transaction.set(usuario_ref, {
+                "gestoria_id": gestoria_ref.id,
+                "email": claims.get("email", ""),
+                "nombre": claims.get("name", ""),
+            })
+            return gestoria_ref.id
+
+        new_id = _register(db.transaction())
+        logger.info("Auto-registered new gestoría %s for user %s", new_id, uid)
+        return new_id
 
     gestoria_id = doc.to_dict().get("gestoria_id")
     if not gestoria_id:

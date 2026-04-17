@@ -31,7 +31,7 @@ def _get_db() -> firestore.Client:
 
 
 def _watch_doc_path(ctx: TenantContext) -> str:
-    return f"gestorias/{ctx.gestoria_id}/clientes/{ctx.cliente_id}"
+    return f"gestorias/{ctx.gestoria_id}/cuentas/{ctx.cliente_id}"
 
 
 # ---------------------------------------------------------------------------

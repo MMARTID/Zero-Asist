@@ -13,6 +13,7 @@ Google Pub/Sub sends a POST with a base64-encoded JSON payload containing
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -33,11 +34,12 @@ from app.collectors.gmail_watch import (
 )
 from app.services.document_processor import process_document
 from app.services.errors import PipelineError
+from app.api.deps import get_db as _get_db
 from app.services.firestore_client import (
     is_message_processed,
     mark_message_processed,
 )
-from app.services.tenant import TenantContext
+from app.services.tenant import TenantContext, extract_tenant_from_doc
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +53,6 @@ _PUBSUB_TOPIC = os.environ.get(
     "GMAIL_PUBSUB_TOPIC",
     "",
 )
-
-# Lazy Firestore client
-_db: Optional[firestore.Client] = None
-
-
-def _get_db() -> firestore.Client:
-    global _db
-    if _db is None:
-        from app.services.firestore_client import db
-        _db = db
-    return _db
 
 
 # ---------------------------------------------------------------------------
@@ -112,21 +103,20 @@ def _verify_pubsub_token(auth_header: Optional[str]) -> dict:
 def _find_tenant_by_email(email: str) -> Optional[TenantContext]:
     """Search Firestore for a client whose gmail_email matches *email*.
 
-    Queries ``gestorias/*/clientes/*`` using a collection-group query.
+    Queries ``gestorias/*/cuentas/*`` using a collection-group query.
     Returns ``None`` if no match.
     """
     db = _get_db()
     docs = (
-        db.collection_group("clientes")
+        db.collection_group("cuentas")
         .where(filter=firestore.FieldFilter("gmail_email", "==", email))
         .limit(1)
         .get()
     )
     for doc in docs:
-        # Path: gestorias/{gid}/clientes/{cid}
-        parts = doc.reference.path.split("/")
-        if len(parts) >= 4:
-            return TenantContext(gestoria_id=parts[1], cliente_id=parts[3])
+        ctx = extract_tenant_from_doc(doc)
+        if ctx:
+            return ctx
     return None
 
 
@@ -274,8 +264,9 @@ def _process_single_message(
 def _process_notification(email_address: str) -> None:
     """Heavy lifting: find tenant, fetch messages, run Gemini pipeline.
 
-    This runs in a background thread so the webhook handler can return 200
-    immediately and never block the FastAPI event loop.
+    Called via ``asyncio.to_thread()`` from the async webhook handler so
+    concurrent notifications for different cuentas run in parallel without
+    blocking the event loop.
     """
     ctx = _find_tenant_by_email(email_address)
     if ctx is None:
@@ -342,14 +333,14 @@ async def gmail_webhook(
     if not email_address:
         raise HTTPException(status_code=400, detail="Missing emailAddress in notification")
 
-    logger.info("Gmail push notification for %s — processing synchronously", email_address)
+    logger.info("Gmail push notification for %s — processing", email_address)
 
-    # 3. Process synchronously so Cloud Run keeps CPU fully allocated
-    #    throughout the entire pipeline (Gemini + Firestore).
+    # 3. Offload blocking I/O (Gmail API, Firestore, Gemini) to a thread
+    #    so concurrent webhook calls don't block each other on the event loop.
     #    We still return 200 even on processing errors to prevent Pub/Sub
     #    infinite retries — idempotency is handled by is_message_processed().
     try:
-        _process_notification(email_address)
+        await asyncio.to_thread(_process_notification, email_address)
     except Exception as e:
         logger.exception("Error processing notification for %s: %s", email_address, e)
 

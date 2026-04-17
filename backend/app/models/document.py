@@ -45,6 +45,14 @@ class TaxLine(BaseModel):
 class InvoiceReceivedExtraction(BaseModel):
     issuer_name: Optional[str] = None
     issuer_nif: Optional[str] = None
+    issuer_address: Optional[str] = None
+    issuer_phone: Optional[str] = None
+    issuer_iban: Optional[str] = None
+    client_name: Optional[str] = None
+    client_nif: Optional[str] = None
+    client_address: Optional[str] = None
+    client_phone: Optional[str] = None
+    client_iban: Optional[str] = None
     invoice_number: Optional[str] = None
     issue_date: Optional[str] = None
     base_amount: Optional[float] = None
@@ -55,14 +63,22 @@ class InvoiceReceivedExtraction(BaseModel):
     billing_period_start: Optional[str] = None
     billing_period_end: Optional[str] = None
     payment_method: Optional[str] = None
+    tax_regime: Optional[str] = None
+    vat_included: Optional[bool] = None
     document_source: Optional[str] = None
 
 
 class InvoiceSentExtraction(BaseModel):
     issuer_name: Optional[str] = None
     issuer_nif: Optional[str] = None
+    issuer_address: Optional[str] = None
+    issuer_phone: Optional[str] = None
+    issuer_iban: Optional[str] = None
     client_name: Optional[str] = None
     client_nif: Optional[str] = None
+    client_address: Optional[str] = None
+    client_phone: Optional[str] = None
+    client_iban: Optional[str] = None
     invoice_number: Optional[str] = None
     issue_date: Optional[str] = None
     base_amount: Optional[float] = None
@@ -71,6 +87,8 @@ class InvoiceSentExtraction(BaseModel):
     currency: Optional[str] = None
     payment_status: Optional[str] = None
     payment_method: Optional[str] = None
+    tax_regime: Optional[str] = None
+    vat_included: Optional[bool] = None
     document_source: Optional[str] = None
 
 
@@ -80,14 +98,14 @@ class PaymentReceiptExtraction(BaseModel):
     currency: Optional[str] = None
     payment_method: Optional[str] = None
     operation_reference: Optional[str] = None
-    issuer_entity: Optional[str] = None
+    issuer_name: Optional[str] = None
     card_last_digits: Optional[str] = None
     iban: Optional[str] = None
     document_source: Optional[str] = None
 
 
 class AdministrativeNoticeExtraction(BaseModel):
-    issuer_entity: Optional[str] = None
+    issuer_name: Optional[str] = None
     notice_type: Optional[str] = None
     issue_date: Optional[str] = None
     deadline: Optional[str] = None
@@ -115,6 +133,9 @@ class BankDocumentExtraction(BaseModel):
 class ContractParty(BaseModel):
     name: Optional[str] = None
     nif: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    iban: Optional[str] = None
 
 
 class ContractExtraction(BaseModel):
@@ -136,6 +157,8 @@ class ExpenseTicketExtraction(BaseModel):
     currency: Optional[str] = None
     concept: Optional[str] = None
     payment_method: Optional[str] = None
+    tax_regime: Optional[str] = None
+    vat_included: Optional[bool] = None
     document_source: Optional[str] = None
 
 

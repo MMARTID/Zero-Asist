@@ -8,8 +8,6 @@ DATE_FIELDS = [
 INVISIBLE_CHARS_RE = re.compile(r"[\u200B\u200C\u200D\u2060\uFEFF]")
 NIF_CIF_RE = re.compile(r"^[A-Z0-9]{8,12}$")
 
-RANGE_RULES: dict[str, tuple[float, float]] = {}
-
 CURRENCY_ALIASES: dict[str, str] = {
     "€": "EUR", "eur": "EUR", "euro": "EUR", "euros": "EUR",
     "$": "USD", "usd": "USD", "dollar": "USD", "dollars": "USD",

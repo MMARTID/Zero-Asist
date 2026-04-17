@@ -1,5 +1,16 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+
+@dataclass
+class CuentaContext:
+    """Identity of the cuenta processing the document."""
+    nombre: str | None = None
+    tax_id: str | None = None
+    tax_country: str | None = None
+    tax_type: str | None = None
 
 
 @dataclass
@@ -33,6 +44,7 @@ class NormalizationContext:
     trace_enabled: bool = False
     trace: list[TraceEntry] = field(default_factory=list)
     issues: list[ValidationIssue] = field(default_factory=list)
+    cuenta: Optional[CuentaContext] = None
 
     def record(self, field_name: str, original: Any, transformed: Any, rule: str, status: str) -> None:
         if self.trace_enabled:

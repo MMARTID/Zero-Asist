@@ -12,12 +12,12 @@ __pycache__
 # Tests y herramientas de desarrollo
 .pytest_cache
 tests/
+_*.py
 
 # Control de versiones y metadatos
 .git
 .flake8
 pytest.ini
-oauth_client_config.json
 .gitignore
 .dockerignore
 README.md

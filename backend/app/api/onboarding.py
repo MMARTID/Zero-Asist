@@ -2,7 +2,7 @@
 
 The OAuth flow uses the server-side (web application) flow:
 
-1. ``POST /onboarding/clientes`` — register a new client.
+1. ``POST /onboarding/cuentas`` — register a new client.
 2. ``GET  /onboarding/gmail/authorize/{cliente_id}`` — redirect to Google consent.
 3. ``GET  /onboarding/gmail/callback`` — exchange code, save creds, start watch.
 
@@ -29,10 +29,12 @@ from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel
 
 from app.api.auth import get_current_gestoria
+from app.api.deps import get_db as _get_db
 from app.collectors.gmail_service import SCOPES
 from app.collectors.gmail_watch import start_watch
 from app.services.credential_store import save_credentials
-from app.services.tenant import TenantContext
+from app.services.tax_id import classify_tax_id, normalize_tax_id_raw
+from app.services.tenant import TenantContext, extract_tenant_from_doc
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +43,7 @@ router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 _PUBSUB_TOPIC = os.environ.get("GMAIL_PUBSUB_TOPIC", "")
 _OAUTH_CLIENT_CONFIG_PATH = os.environ.get("OAUTH_CLIENT_CONFIG_PATH", "oauth_client_config.json")
 _OAUTH_REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI", "")
-
-# Lazy Firestore client
-_db: Optional[firestore.Client] = None
-
-
-def _get_db() -> firestore.Client:
-    global _db
-    if _db is None:
-        from app.services.firestore_client import db
-        _db = db
-    return _db
+_FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
 
 def _build_flow() -> Flow:
@@ -76,29 +68,49 @@ def _build_flow() -> Flow:
 
 class CreateClientRequest(BaseModel):
     nombre: str
-    email: str
+    phone_number: str
+    tax_id: str
 
 
-@router.post("/clientes")
+@router.post("/cuentas")
 def create_client(
     body: CreateClientRequest,
     gestoria_id: str = Depends(get_current_gestoria),
 ):
     """Register a new client under the authenticated gestoría."""
+    # Normalize + classify the tax identifier
+    normalized = normalize_tax_id_raw(body.tax_id)
+    if not normalized:
+        raise HTTPException(status_code=422, detail="Identificador fiscal vacío")
+    classified = classify_tax_id(normalized)
+    if classified is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Identificador fiscal no reconocido: {body.tax_id}",
+        )
+
     db = _get_db()
-    doc_ref = db.collection(f"gestorias/{gestoria_id}/clientes").document()
+    doc_ref = db.collection(f"gestorias/{gestoria_id}/cuentas").document()
     doc_ref.set({
         "nombre": body.nombre,
-        "email": body.email,
+        "phone_number": body.phone_number,
+        "tax_id": classified.tax_id,
+        "tax_country": classified.tax_country,
+        "tax_type": classified.tax_type,
         "gmail_email": None,
         "gmail_watch_status": None,
+        "min_income": None,
+        "max_income": None,
         "created_at": firestore.SERVER_TIMESTAMP,
     })
 
     return {
-        "cliente_id": doc_ref.id,
+        "cuenta_id": doc_ref.id,
         "gestoria_id": gestoria_id,
         "nombre": body.nombre,
+        "tax_id": classified.tax_id,
+        "tax_country": classified.tax_country,
+        "tax_type": classified.tax_type,
     }
 
 
@@ -106,19 +118,19 @@ def create_client(
 # Gmail OAuth — Step 1: authorize
 # ---------------------------------------------------------------------------
 
-@router.get("/gmail/authorize/{cliente_id}")
+@router.get("/gmail/authorize/{cuenta_id}")
 def gmail_authorize(
-    cliente_id: str,
+    cuenta_id: str,
     gestoria_id: str = Depends(get_current_gestoria),
 ):
     """Redirect the user to Google's OAuth consent screen.
 
-    Encodes ``gestoria_id:cliente_id`` in the OAuth ``state`` parameter so
+    Encodes ``gestoria_id:cuenta_id`` in the OAuth ``state`` parameter so
     the callback can associate the tokens with the right tenant.
     """
     db = _get_db()
     client_doc = db.document(
-        f"gestorias/{gestoria_id}/clientes/{cliente_id}",
+        f"gestorias/{gestoria_id}/cuentas/{cuenta_id}",
     ).get()
     if not client_doc.exists:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -132,7 +144,7 @@ def gmail_authorize(
 
     # Persist the PKCE code_verifier in the state so the callback can use it
     code_verifier = flow.code_verifier or ""
-    state = f"{gestoria_id}:{cliente_id}:{code_verifier}"
+    state = f"{gestoria_id}:{cuenta_id}:{code_verifier}"
 
     # Re-generate the URL with our custom state
     flow2 = _build_flow()
@@ -168,23 +180,27 @@ def gmail_callback(
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
     gestoria_id = parts[0]
-    cliente_id = parts[1]
+    cuenta_id = parts[1]
     code_verifier = parts[2] if len(parts) > 2 else ""
-    ctx = TenantContext(gestoria_id=gestoria_id, cliente_id=cliente_id)
+    ctx = TenantContext(gestoria_id=gestoria_id, cliente_id=cuenta_id)
 
     # Verify tenant exists (prevents orphan documents from forged state)
     db = _get_db()
     client_doc = db.document(
-        f"gestorias/{gestoria_id}/clientes/{cliente_id}",
+        f"gestorias/{gestoria_id}/cuentas/{cuenta_id}",
     ).get()
     if not client_doc.exists:
         raise HTTPException(status_code=404, detail="Client not found")
 
     # Exchange code for credentials (restore PKCE code_verifier)
-    flow = _build_flow()
-    if code_verifier:
-        flow.code_verifier = code_verifier
-    flow.fetch_token(code=code)
+    try:
+        flow = _build_flow()
+        if code_verifier:
+            flow.code_verifier = code_verifier
+        flow.fetch_token(code=code)
+    except Exception as e:
+        logger.error("OAuth token exchange failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"Token exchange failed: {e}")
     creds: Credentials = flow.credentials
 
     # Persist tokens
@@ -193,24 +209,26 @@ def gmail_callback(
     # Fetch Gmail email for webhook lookups
     from googleapiclient.discovery import build
 
-    service = build("gmail", "v1", credentials=creds)
-    profile = service.users().getProfile(userId="me").execute()
-    gmail_email = profile.get("emailAddress", "")
+    try:
+        service = build("gmail", "v1", credentials=creds)
+        profile = service.users().getProfile(userId="me").execute()
+        gmail_email = profile.get("emailAddress", "")
+    except Exception as e:
+        logger.error("Failed to fetch Gmail profile: %s", e)
+        raise HTTPException(status_code=502, detail=f"Gmail profile fetch failed: {e}")
 
     # Guard: reject if this Gmail account is already connected to a DIFFERENT
     # client (in any gestoria). Same-client re-connections are allowed.
     existing = (
-        db.collection_group("clientes")
+        db.collection_group("cuentas")
         .where(filter=firestore.FieldFilter("gmail_email", "==", gmail_email))
         .where(filter=firestore.FieldFilter("gmail_watch_status", "==", "active"))
         .limit(5)
         .get()
     )
     for ex_doc in existing:
-        ex_parts = ex_doc.reference.path.split("/")
-        if len(ex_parts) >= 4:
-            ex_gid, ex_cid = ex_parts[1], ex_parts[3]
-            if ex_cid != cliente_id:
+        ex_ctx = extract_tenant_from_doc(ex_doc)
+        if ex_ctx and ex_ctx.cliente_id != cuenta_id:
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -219,7 +237,7 @@ def gmail_callback(
                     ),
                 )
 
-    db.document(f"gestorias/{gestoria_id}/clientes/{cliente_id}").set(
+    db.document(f"gestorias/{gestoria_id}/cuentas/{cuenta_id}").set(
         {"gmail_email": gmail_email},
         merge=True,
     )
@@ -232,20 +250,16 @@ def gmail_callback(
             watch_started = True
             logger.info(
                 "Watch started for %s/%s after OAuth",
-                gestoria_id, cliente_id,
+                gestoria_id, cuenta_id,
             )
         except Exception as e:
             logger.error(
                 "Failed to start watch after OAuth for %s/%s: %s",
-                gestoria_id, cliente_id, e,
+                gestoria_id, cuenta_id, e,
             )
     else:
         logger.warning("GMAIL_PUBSUB_TOPIC not set — skipping watch start")
 
-    return {
-        "status": "connected",
-        "gestoria_id": gestoria_id,
-        "cliente_id": cliente_id,
-        "gmail_email": gmail_email,
-        "watch_started": watch_started,
-    }
+    # Redirect back to the frontend cuenta page (Gmail tab)
+    redirect_url = f"{_FRONTEND_URL}/dashboard/cuentas/{cuenta_id}"
+    return RedirectResponse(url=redirect_url, status_code=302)

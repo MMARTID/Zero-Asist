@@ -35,6 +35,7 @@ from app.models.registry import (
 
 # --- Re-exports (backward compatibility) -----------------------------------
 from app.ingestion.context import (  # noqa: F401
+    CuentaContext,
     NormalizationContext,
     NormalizationReport,
     TraceEntry,
@@ -50,8 +51,12 @@ from app.ingestion.helpers import (  # noqa: F401
     _split_invoice_series,
     _track_transform,
     infer_tax_regime,
+    make_field_tracker,
     normalize_date,
+    normalize_document_source,
+    normalize_list_field,
     normalize_number,
+    normalize_tax_block,
     normalize_tax_lines,
     normalize_tax_type,
     snap_tax_rate,
@@ -89,7 +94,8 @@ logger = logging.getLogger(__name__)
 
 _PROMPT_INVOICE_RECEIVED = (
     "Eres un experto contable español. Analiza esta factura recibida (gasto) y extrae todos los datos disponibles. "
-    "Busca: nombre y NIF/CIF del emisor, número de factura, fecha de emisión, "
+    "Busca: nombre y NIF/CIF del emisor, nombre y NIF/CIF del cliente o receptor, "
+    "número de factura, fecha de emisión, "
     "base imponible, importe total, moneda, "
     "concepto o descripción del servicio/producto, "
     "periodo de facturación (inicio y fin) si aparece, "
@@ -97,7 +103,11 @@ _PROMPT_INVOICE_RECEIVED = (
     "Para cada impuesto o retención que aparezca en la factura "
     "(IVA, recargo de equivalencia, IGIC, IPSI, IRPF u otro), "
     "extrae una línea en tax_lines con: tipo de impuesto (tax_type), "
-    "porcentaje (rate), base imponible de esa línea (base_amount) y cuota (amount)."
+    "porcentaje (rate), base imponible de esa línea (base_amount) y cuota (amount). "
+    "IMPORTANTE: Si el emisor es una persona física (NIF con formato de DNI, ej. 12345678A) "
+    "y el receptor es una empresa, busca obligatoriamente la línea de retención de IRPF, "
+    "incluso si no está explícitamente etiquetada. Detecta el descuadre entre "
+    "Base Imponible + IVA y el Total para inferir la retención de IRPF."
 )
 
 _PROMPT_INVOICE_SENT = (
@@ -182,9 +192,10 @@ def normalize_document_with_report(
     *,
     strict: bool = False,
     trace: bool = False,
+    cuenta_context: CuentaContext | None = None,
 ) -> NormalizationReport:
     """Normalize with optional strict mode and full traceability report."""
-    ctx = NormalizationContext(strict=strict, trace_enabled=trace)
+    ctx = NormalizationContext(strict=strict, trace_enabled=trace, cuenta=cuenta_context)
 
     if not isinstance(data, dict):
         ctx.add_issue("data", "expected_dict", "invalid", value=data)
@@ -205,9 +216,15 @@ def normalize_document_with_report(
     )
 
 
-def normalize_document(data: Dict[str, Any], document_type: str) -> Dict[str, Any]:
+def normalize_document(
+    data: Dict[str, Any],
+    document_type: str,
+    cuenta_context: CuentaContext | None = None,
+) -> Dict[str, Any]:
     """Backward-compatible dispatcher used by the ingestion pipeline."""
-    report = normalize_document_with_report(data, document_type, strict=False, trace=False)
+    report = normalize_document_with_report(
+        data, document_type, strict=False, trace=False, cuenta_context=cuenta_context,
+    )
     return report.normalized
 
 
@@ -243,7 +260,7 @@ register_document_type(DocumentTypeConfig(
     document_type="administrative_notice",
     normalizer=normalize_administrative_notice,
     schema=AdministrativeNoticeExtraction,
-    required_fields=["issuer_entity", "issue_date"],
+    required_fields=["issuer_name", "issue_date"],
     extraction_schema=AdministrativeNoticeExtraction,
     prompt=_PROMPT_ADMINISTRATIVE_NOTICE,
 ))

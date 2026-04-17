@@ -47,7 +47,7 @@ def test_start_watch(mock_service, mock_db, ctx):
 
     assert result["historyId"] == "12345"
     assert result["expiration"] == 1700000000000
-    mock_db.document.assert_called_with("gestorias/g1/clientes/c1")
+    mock_db.document.assert_called_with("gestorias/g1/cuentas/c1")
     mock_db.document().set.assert_called_once()
     saved = mock_db.document().set.call_args
     state = saved[0][0]["gmail_watch_state"]

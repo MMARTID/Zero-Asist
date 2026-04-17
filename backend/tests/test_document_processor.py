@@ -69,9 +69,9 @@ def test_is_document_duplicate_returns_true_when_found(monkeypatch):
 def test_extract_and_normalize_happy_path(monkeypatch):
     """extract_and_normalize returns the processed triple."""
     monkeypatch.setattr(document_processor, "classify_document",
-                        lambda fb, mt: "invoice_received")
+                        lambda fb, mt, **kw: "invoice_received")
     monkeypatch.setattr(document_processor, "extract_document",
-                        lambda fb, mt, dt: {
+                        lambda fb, mt, dt, **kw: {
                             "issuer_name": "Empresa SL",
                             "issue_date": "2024-01-15",
                             "total_amount": 121.0,
@@ -89,7 +89,7 @@ def test_extract_and_normalize_happy_path(monkeypatch):
 
 def test_extract_and_normalize_unknown_type_uses_generic(monkeypatch):
     monkeypatch.setattr(document_processor, "classify_document",
-                        lambda fb, mt: "tipo_desconocido")
+                        lambda fb, mt, **kw: "tipo_desconocido")
 
     doc_type, normalized, extracted = extract_and_normalize(b"x", "application/pdf")
 
@@ -110,9 +110,9 @@ def test_extract_and_normalize_propagates_gemini_error(monkeypatch):
 def test_extract_and_normalize_bank_document_dates(monkeypatch):
     """Date fields in bank_document are converted to datetime for Firestore."""
     monkeypatch.setattr(document_processor, "classify_document",
-                        lambda fb, mt: "bank_document")
+                        lambda fb, mt, **kw: "bank_document")
     monkeypatch.setattr(document_processor, "extract_document",
-                        lambda fb, mt, dt: {
+                        lambda fb, mt, dt, **kw: {
                             "bank_name": "Banco Test",
                             "document_date": "2024-01-15",
                         })
@@ -323,3 +323,95 @@ def test_process_document_all_mime_types_accepted(monkeypatch):
     for mime in ALLOWED_MIME_TYPES:
         result = process_document(b"data", mime, "file", 4)
         assert result.status == "processed", f"Falló para mime={mime}"
+
+
+# ---------------------------------------------------------------------------
+# _load_cuenta_context
+# ---------------------------------------------------------------------------
+
+def test_load_cuenta_context_none_ctx():
+    """None ctx returns None immediately without Firestore call."""
+    from app.services.document_processor import _load_cuenta_context
+    assert _load_cuenta_context(None) is None
+
+
+def test_load_cuenta_context_returns_cuenta(monkeypatch):
+    """Loads nombre, tax_id, tax_country, tax_type from Firestore cuenta doc."""
+    from app.services.document_processor import _load_cuenta_context
+    from app.services.tenant import TenantContext
+
+    fake_doc = MagicMock()
+    fake_doc.exists = True
+    fake_doc.to_dict.return_value = {
+        "nombre": "Empresa Test SL",
+        "tax_id": "B12345678",
+        "tax_country": "ES",
+        "tax_type": "cif_empresa",
+    }
+    fake_db = MagicMock()
+    fake_db.document.return_value.get.return_value = fake_doc
+    monkeypatch.setattr(document_processor, "db", fake_db)
+
+    ctx = TenantContext(gestoria_id="g1", cliente_id="c1")
+    result = _load_cuenta_context(ctx)
+
+    assert result is not None
+    assert result.nombre == "Empresa Test SL"
+    assert result.tax_id == "B12345678"
+    assert result.tax_country == "ES"
+    assert result.tax_type == "cif_empresa"
+
+
+def test_load_cuenta_context_missing_doc(monkeypatch):
+    """Missing cuenta doc returns None."""
+    from app.services.document_processor import _load_cuenta_context
+    from app.services.tenant import TenantContext
+
+    fake_doc = MagicMock()
+    fake_doc.exists = False
+    fake_db = MagicMock()
+    fake_db.document.return_value.get.return_value = fake_doc
+    monkeypatch.setattr(document_processor, "db", fake_db)
+
+    ctx = TenantContext(gestoria_id="g1", cliente_id="c1")
+    assert _load_cuenta_context(ctx) is None
+
+
+# ---------------------------------------------------------------------------
+# extract_and_normalize with ctx
+# ---------------------------------------------------------------------------
+
+def test_extract_and_normalize_with_ctx_passes_cuenta_context(monkeypatch):
+    """When ctx is provided, extract_document receives cuenta_context."""
+    from app.services.tenant import TenantContext
+
+    # Mock Firestore for _load_cuenta_context
+    fake_doc = MagicMock()
+    fake_doc.exists = True
+    fake_doc.to_dict.return_value = {
+        "nombre": "Test SL",
+        "tax_id": "B12345678",
+        "tax_country": "ES",
+        "tax_type": "cif_empresa",
+    }
+    fake_db = MagicMock()
+    fake_db.document.return_value.get.return_value = fake_doc
+    monkeypatch.setattr(document_processor, "db", fake_db)
+
+    monkeypatch.setattr(document_processor, "classify_document",
+                        lambda fb, mt, **kw: "invoice_received")
+
+    captured_kwargs = {}
+    def fake_extract(fb, mt, dt, **kwargs):
+        captured_kwargs.update(kwargs)
+        return {"issuer_name": "Empresa SL", "total_amount": 121.0}
+
+    monkeypatch.setattr(document_processor, "extract_document", fake_extract)
+
+    ctx = TenantContext(gestoria_id="g1", cliente_id="c1")
+    doc_type, normalized, extracted = extract_and_normalize(b"fake", "application/pdf", ctx=ctx)
+
+    assert doc_type == "invoice_received"
+    assert "cuenta_context" in captured_kwargs
+    assert captured_kwargs["cuenta_context"].nombre == "Test SL"
+    assert captured_kwargs["cuenta_context"].tax_id == "B12345678"

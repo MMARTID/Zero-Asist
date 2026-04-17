@@ -131,9 +131,13 @@ def normalize_date(date_str: Any) -> date | None:
         "%d/%m/%Y",
         "%d-%m-%Y",
         "%Y/%m/%d",
+        # Dot-separated — common in German, Swiss, Austrian, and many EU invoices
+        "%d.%m.%Y",
+        "%Y.%m.%d",
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M:%S%z",
         "%d/%m/%Y %H:%M:%S",
+        "%d.%m.%Y %H:%M:%S",
     )
     for fmt in date_formats:
         try:
@@ -319,3 +323,51 @@ def infer_tax_regime(tax_lines: list[dict]) -> str:
     if types & ADDITIVE_TAX_TYPES:
         return "peninsular"
     return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# DRY helpers for normalizers
+# ---------------------------------------------------------------------------
+
+def make_field_tracker(ctx: NormalizationContext, raw: Dict[str, Any]):
+    """Return a _t(key, value, rule) closure for tracking field transforms."""
+    def _t(key: str, value: Any, rule: str) -> Any:
+        _track_transform(ctx, key, raw.get(key), value, rule, f"invalid_{key}")
+        return value
+    return _t
+
+
+def normalize_list_field(
+    raw: Dict[str, Any],
+    key: str,
+    item_fn,
+    ctx: NormalizationContext,
+) -> list:
+    """Validate that raw[key] is a list, normalize each dict item via item_fn."""
+    items_raw = raw.get(key, [])
+    if not isinstance(items_raw, list):
+        ctx.add_issue(key, "expected_list", "invalid", value=items_raw)
+        items_raw = []
+    return [
+        item_fn(item, ctx, f"{key}[{idx}]")
+        for idx, item in enumerate(items_raw)
+        if isinstance(item, dict)
+    ]
+
+
+def normalize_document_source(raw: Dict[str, Any], ctx: NormalizationContext) -> str | None:
+    """Normalize the document_source field common to all document types."""
+    value = _clean_string(raw.get("document_source"))
+    _track_transform(ctx, "document_source", raw.get("document_source"), value, "clean_string", "invalid_document_source")
+    return value
+
+
+def normalize_tax_block(
+    raw: Dict[str, Any],
+    base_amount: float | None,
+    ctx: NormalizationContext,
+) -> tuple[list[dict], str]:
+    """Normalize tax_lines and derive tax_regime — shared by invoice & expense_ticket."""
+    tax_lines = normalize_tax_lines(raw.get("tax_lines"), base_amount, ctx)
+    tax_regime = infer_tax_regime(tax_lines)
+    return tax_lines, tax_regime

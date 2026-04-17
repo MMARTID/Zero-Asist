@@ -24,6 +24,9 @@ npm-debug.log*
 # ── OS ───────────────────────────────────────────────────────────
 .DS_Store
 
+# ── Scripts de utilidad locales ───────────────────────────────────
+backend/_*.py
+
 # ── Secretos / credenciales ──────────────────────────────────────
 backend/app/collectors/token.json
 backend/app/collectors/credentials.json

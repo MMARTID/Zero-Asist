@@ -84,7 +84,7 @@ def test_gestoria_from_firestore_lookup(monkeypatch):
 
     mock_db = MagicMock()
     mock_db.collection.return_value.document.return_value.get.return_value = mock_doc
-    monkeypatch.setattr("app.api.auth._db", mock_db)
+    monkeypatch.setattr("app.api.deps._db", mock_db)
 
     response = client.get("/protected", headers={"Authorization": "Bearer ok"})
     assert response.status_code == 200
@@ -110,7 +110,7 @@ def test_user_not_in_firestore_auto_registers(monkeypatch):
     mock_db = MagicMock()
     mock_db.collection.return_value.document.return_value.get.return_value = mock_doc
     mock_db.collection.return_value.document.return_value = mock_gestoria_ref
-    monkeypatch.setattr("app.api.auth._db", mock_db)
+    monkeypatch.setattr("app.api.deps._db", mock_db)
 
     response = client.get("/protected", headers={"Authorization": "Bearer ok"})
     assert response.status_code == 200
@@ -132,7 +132,7 @@ def test_user_without_gestoria_id(monkeypatch):
 
     mock_db = MagicMock()
     mock_db.collection.return_value.document.return_value.get.return_value = mock_doc
-    monkeypatch.setattr("app.api.auth._db", mock_db)
+    monkeypatch.setattr("app.api.deps._db", mock_db)
 
     response = client.get("/protected", headers={"Authorization": "Bearer ok"})
     assert response.status_code == 403

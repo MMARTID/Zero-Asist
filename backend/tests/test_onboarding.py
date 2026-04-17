@@ -15,7 +15,7 @@ client = TestClient(app)
 
 
 # ---------------------------------------------------------------------------
-# POST /onboarding/clientes
+# POST /onboarding/cuentas
 # ---------------------------------------------------------------------------
 
 def test_create_client(monkeypatch):
@@ -25,23 +25,47 @@ def test_create_client(monkeypatch):
 
     mock_db = MagicMock()
     mock_db.collection.return_value.document.return_value = mock_ref
-    monkeypatch.setattr("app.api.onboarding._db", mock_db)
+    monkeypatch.setattr("app.api.deps._db", mock_db)
 
     response = client.post(
-        "/onboarding/clientes",
-        json={"nombre": "Test Client", "email": "test@example.com"},
+        "/onboarding/cuentas",
+        json={"nombre": "Test Client", "phone_number": "+34600123456", "tax_id": "B12345678"},
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["cliente_id"] == "new-client-id"
+    assert data["cuenta_id"] == "new-client-id"
     assert data["gestoria_id"] == _GESTORIA
     assert data["nombre"] == "Test Client"
+    assert data["tax_id"] == "B12345678"
+    assert data["tax_country"] == "ES"
+    assert data["tax_type"] == "company"
     mock_ref.set.assert_called_once()
 
 
 def test_create_client_missing_fields():
     """Missing required fields → 422."""
-    response = client.post("/onboarding/clientes", json={"nombre": "Only name"})
+    response = client.post("/onboarding/cuentas", json={"nombre": "Only name"})
+    assert response.status_code == 422
+
+
+def test_create_client_missing_phone():
+    """Missing phone_number → 422."""
+    response = client.post("/onboarding/cuentas", json={"nombre": "No phone", "tax_id": "B12345678"})
+    assert response.status_code == 422
+
+
+def test_create_client_invalid_tax_id(monkeypatch):
+    """Unrecognizable tax_id → 422."""
+    mock_ref = MagicMock()
+    mock_ref.id = "wont-be-used"
+    mock_db = MagicMock()
+    mock_db.collection.return_value.document.return_value = mock_ref
+    monkeypatch.setattr("app.api.deps._db", mock_db)
+
+    response = client.post(
+        "/onboarding/cuentas",
+        json={"nombre": "Test", "phone_number": "+34600123456", "tax_id": "INVALID"},
+    )
     assert response.status_code == 422
 
 
@@ -56,7 +80,7 @@ def test_authorize_client_not_found(monkeypatch):
 
     mock_db = MagicMock()
     mock_db.document.return_value.get.return_value = mock_doc
-    monkeypatch.setattr("app.api.onboarding._db", mock_db)
+    monkeypatch.setattr("app.api.deps._db", mock_db)
 
     response = client.get(
         "/onboarding/gmail/authorize/c-missing",
@@ -72,7 +96,7 @@ def test_authorize_missing_oauth_config(monkeypatch):
 
     mock_db = MagicMock()
     mock_db.document.return_value.get.return_value = mock_doc
-    monkeypatch.setattr("app.api.onboarding._db", mock_db)
+    monkeypatch.setattr("app.api.deps._db", mock_db)
     monkeypatch.setattr("app.api.onboarding._OAUTH_CLIENT_CONFIG_PATH", "")
 
     response = client.get(
@@ -88,7 +112,7 @@ def test_authorize_returns_url(monkeypatch):
     mock_doc.exists = True
     mock_db = MagicMock()
     mock_db.document.return_value.get.return_value = mock_doc
-    monkeypatch.setattr("app.api.onboarding._db", mock_db)
+    monkeypatch.setattr("app.api.deps._db", mock_db)
 
     mock_flow = MagicMock()
     mock_flow.authorization_url.return_value = ("https://accounts.google.com/auth?x=1", "dummy")
@@ -119,7 +143,7 @@ def test_callback_client_not_found(monkeypatch):
     mock_doc.exists = False
     mock_db = MagicMock()
     mock_db.document.return_value.get.return_value = mock_doc
-    monkeypatch.setattr("app.api.onboarding._db", mock_db)
+    monkeypatch.setattr("app.api.deps._db", mock_db)
 
     mock_flow = MagicMock()
     monkeypatch.setattr("app.api.onboarding._build_flow", lambda: mock_flow)
@@ -135,7 +159,7 @@ def test_callback_happy_path(monkeypatch):
     mock_doc.exists = True
     mock_db = MagicMock()
     mock_db.document.return_value.get.return_value = mock_doc
-    monkeypatch.setattr("app.api.onboarding._db", mock_db)
+    monkeypatch.setattr("app.api.deps._db", mock_db)
 
     # OAuth flow
     mock_creds = MagicMock()
@@ -157,12 +181,9 @@ def test_callback_happy_path(monkeypatch):
     # No Pub/Sub topic → skip watch start
     monkeypatch.setattr("app.api.onboarding._PUBSUB_TOPIC", "")
 
-    response = client.get("/onboarding/gmail/callback?code=AUTH_CODE&state=g1:c1")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "connected"
-    assert data["gmail_email"] == "cliente@gmail.com"
-    assert data["watch_started"] is False
+    response = client.get("/onboarding/gmail/callback?code=AUTH_CODE&state=g1:c1", follow_redirects=False)
+    assert response.status_code == 302
+    assert "/dashboard/cuentas/c1" in response.headers["location"]
     save_mock.assert_called_once()
 
 
@@ -172,7 +193,7 @@ def test_callback_starts_watch(monkeypatch):
     mock_doc.exists = True
     mock_db = MagicMock()
     mock_db.document.return_value.get.return_value = mock_doc
-    monkeypatch.setattr("app.api.onboarding._db", mock_db)
+    monkeypatch.setattr("app.api.deps._db", mock_db)
 
     mock_creds = MagicMock()
     mock_flow = MagicMock()
@@ -190,7 +211,6 @@ def test_callback_starts_watch(monkeypatch):
     watch_mock = MagicMock()
     monkeypatch.setattr("app.api.onboarding.start_watch", watch_mock)
 
-    response = client.get("/onboarding/gmail/callback?code=AUTH_CODE&state=g1:c1")
-    assert response.status_code == 200
-    assert response.json()["watch_started"] is True
+    response = client.get("/onboarding/gmail/callback?code=AUTH_CODE&state=g1:c1", follow_redirects=False)
+    assert response.status_code == 302
     watch_mock.assert_called_once()

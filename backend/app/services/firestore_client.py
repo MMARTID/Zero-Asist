@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from google.cloud import firestore
 
-from app.services.constants import COLLECTION_DOCS, COLLECTION_GMAIL
+from app.services.constants import COLLECTION_GMAIL
 from app.services.tenant import TenantContext, resolve_docs_collection, resolve_gmail_collection
 
 # Inicializar cliente de Firestore (usa las credenciales por defecto en Cloud Run)

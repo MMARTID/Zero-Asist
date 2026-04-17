@@ -8,7 +8,10 @@ from app.ingestion.helpers import (
     _normalize_company_name,
     _normalize_tax_id,
     _track_transform,
+    make_field_tracker,
     normalize_date,
+    normalize_document_source,
+    normalize_list_field,
 )
 
 
@@ -24,21 +27,9 @@ def _normalize_party(item: Dict[str, Any], ctx: NormalizationContext, path: str)
 def normalize_contract(raw: Dict[str, Any], ctx: NormalizationContext | None = None) -> Dict[str, Any]:
     """Normalize contract documents."""
     local_ctx = ctx or NormalizationContext()
+    _t = make_field_tracker(local_ctx, raw)
 
-    parties_raw = raw.get("parties", [])
-    if not isinstance(parties_raw, list):
-        local_ctx.add_issue("parties", "expected_list", "invalid", value=parties_raw)
-        parties_raw = []
-
-    parties = [
-        _normalize_party(p, local_ctx, f"parties[{i}]")
-        for i, p in enumerate(parties_raw)
-        if isinstance(p, dict)
-    ]
-
-    def _t(key: str, value: Any, rule: str) -> Any:
-        _track_transform(local_ctx, key, raw.get(key), value, rule, f"invalid_{key}")
-        return value
+    parties = normalize_list_field(raw, "parties", _normalize_party, local_ctx)
 
     return {
         "parties":         parties,
@@ -47,5 +38,5 @@ def normalize_contract(raw: Dict[str, Any], ctx: NormalizationContext | None = N
         "duration":        _t("duration",        _clean_string(raw.get("duration")),          "clean_string"),
         "economic_terms":  _t("economic_terms",  _clean_string(raw.get("economic_terms")),    "clean_string"),
         "signed":          raw.get("signed"),
-        "document_source": _t("document_source", _clean_string(raw.get("document_source")),  "clean_string"),
+        "document_source": normalize_document_source(raw, local_ctx),
     }

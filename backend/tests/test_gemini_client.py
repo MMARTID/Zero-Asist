@@ -57,6 +57,15 @@ def test_classify_document_xml_by_content(fake_generate):
     assert result == "other"
 
 
+def test_classify_document_with_cuenta_context(fake_generate):
+    """classify_document acepta cuenta_context y devuelve el tipo correctamente."""
+    from app.ingestion.context import CuentaContext
+    fake_generate('{"document_type": "invoice_sent"}')
+    ctx = CuentaContext(nombre="Mi Empresa SA", tax_id="A87654321")
+    result = gemini_client.classify_document(b"fake pdf", "application/pdf", cuenta_context=ctx)
+    assert result == "invoice_sent"
+
+
 # ---------------------------------------------------------------------------
 # extract_document
 # ---------------------------------------------------------------------------
@@ -126,3 +135,58 @@ def test_extract_document_json_invalido(monkeypatch):
     with pytest.raises(PipelineError) as exc_info:
         gemini_client.extract_document(b"fake", "application/pdf", "invoice_received")
     assert exc_info.value.code == "PARSE_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# _build_prompt (cuenta context enrichment)
+# ---------------------------------------------------------------------------
+
+def test_build_prompt_no_context():
+    """Without CuentaContext, prompt is returned unchanged."""
+    base = "Eres un experto."
+    assert gemini_client._build_prompt(base, None) == base
+
+
+def test_build_prompt_with_full_context():
+    """CuentaContext with nombre + tax_id appends a context suffix."""
+    from app.ingestion.context import CuentaContext
+    ctx = CuentaContext(nombre="Mi Empresa SL", tax_id="B12345678")
+    result = gemini_client._build_prompt("Prompt base.", ctx)
+    assert "Prompt base." in result
+    assert "Mi Empresa SL" in result
+    assert "B12345678" in result
+    assert "DATOS DE LA CUENTA" in result
+
+
+def test_build_prompt_with_only_nombre():
+    from app.ingestion.context import CuentaContext
+    ctx = CuentaContext(nombre="Solo Nombre")
+    result = gemini_client._build_prompt("Base.", ctx)
+    assert "Solo Nombre" in result
+
+
+def test_build_prompt_with_empty_context():
+    """CuentaContext with all None fields returns base prompt unchanged."""
+    from app.ingestion.context import CuentaContext
+    ctx = CuentaContext()
+    assert gemini_client._build_prompt("Base.", ctx) == "Base."
+
+
+def test_extract_document_with_cuenta_context(fake_generate):
+    """extract_document accepts cuenta_context and produces a valid result."""
+    from app.ingestion.context import CuentaContext
+
+    fake_generate('{"issuer_name": "Proveedor SL", "total_amount": 100.0}')
+    ctx = CuentaContext(nombre="Mi Gestoría", tax_id="A12345678")
+    result = gemini_client.extract_document(
+        b"fake pdf", "application/pdf", "invoice_received",
+        cuenta_context=ctx,
+    )
+    assert result["issuer_name"] == "Proveedor SL"
+
+
+def test_extract_document_without_cuenta_context(fake_generate):
+    """extract_document works normally without cuenta_context (backward compat)."""
+    fake_generate('{"issuer_name": "Test SL", "total_amount": 50.0}')
+    result = gemini_client.extract_document(b"fake", "application/pdf", "invoice_received")
+    assert result["issuer_name"] == "Test SL"

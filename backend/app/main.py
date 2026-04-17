@@ -41,3 +41,8 @@ app.include_router(webhook_router)
 app.include_router(internal_router)
 app.include_router(onboarding_router)
 app.include_router(dashboard_router)
+
+
+@app.get("/")
+def health_check():
+    return {"status": "ok"}
