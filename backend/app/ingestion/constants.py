@@ -5,8 +5,12 @@ DATE_FIELDS = [
     "payment_date", "deadline", "document_date", "contract_date",
 ]
 
+# Pre-compiled regexes for optimal performance
 INVISIBLE_CHARS_RE = re.compile(r"[\u200B\u200C\u200D\u2060\uFEFF]")
 NIF_CIF_RE = re.compile(r"^[A-Z0-9]{8,12}$")
+WHITESPACE_RE = re.compile(r"\s+")
+NON_ALPHANUMERIC_RE = re.compile(r"[^A-Za-z0-9]")
+NON_NUMERIC_RE = re.compile(r"[^0-9,\.]")
 
 CURRENCY_ALIASES: dict[str, str] = {
     "€": "EUR", "eur": "EUR", "euro": "EUR", "euros": "EUR",
@@ -59,8 +63,8 @@ PAYMENT_KEYWORDS: dict[str, str] = {
     "giro": "bank_draft",
 }
 
-ARITHMETIC_TOLERANCE_RATIO = 0.02
-ARITHMETIC_TOLERANCE_MIN = 0.05
+ARITHMETIC_TOLERANCE_RATIO = 0.001  # 0.1% (stricter than before: was 0.02)
+ARITHMETIC_TOLERANCE_MIN = 0.01     # €0.01 (stricter than before: was 0.05)
 
 # ---------------------------------------------------------------------------
 # Spanish tax system

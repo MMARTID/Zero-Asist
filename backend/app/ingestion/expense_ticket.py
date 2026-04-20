@@ -28,7 +28,6 @@ def normalize_expense_ticket(raw: Dict[str, Any], ctx: NormalizationContext | No
     _track_transform(local_ctx, "total_amount", raw.get("total_amount"), total_amount, "normalize_number", "invalid_total_amount")
 
     tax_lines, tax_regime = normalize_tax_block(raw, base_amount, local_ctx)
-    vat_included = len(tax_lines) > 0
 
     return {
         "issuer_name":     _t("issuer_name",     _normalize_company_name(raw.get("issuer_name")),  "normalize_company_name"),
@@ -37,7 +36,7 @@ def normalize_expense_ticket(raw: Dict[str, Any], ctx: NormalizationContext | No
         "total_amount":    total_amount,
         "tax_lines":       tax_lines,
         "tax_regime":      tax_regime,
-        "vat_included":    vat_included,
+        "vat_included":    True,
         "currency":        _t("currency",        _normalize_currency(raw.get("currency")),         "normalize_currency"),
         "concept":         _t("concept",         _clean_string(raw.get("concept")),                "clean_string"),
         "payment_method":  _t("payment_method",  _clean_string(raw.get("payment_method")),         "clean_string"),

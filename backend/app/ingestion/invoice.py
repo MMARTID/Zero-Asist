@@ -6,10 +6,13 @@ from app.ingestion.constants import ADDITIVE_TAX_TYPES, RETENTION_TAX_TYPES
 from app.ingestion.context import NormalizationContext
 from app.ingestion.helpers import (
     _clean_string,
+    _normalize_bool,
     _normalize_company_name,
     _normalize_currency,
     _normalize_tax_id,
     _track_transform,
+    infer_vat_included_from_arithmetic,
+    infer_missing_irpf,
     make_field_tracker,
     normalize_date,
     normalize_document_source,
@@ -61,9 +64,40 @@ def _normalize_invoice_like(raw: Dict[str, Any], ctx: NormalizationContext, is_s
     tax_lines, tax_regime = normalize_tax_block(raw, base_amount, ctx)
     base_amount, total_amount = _fill_amount_gaps(base_amount, total_amount, tax_lines, ctx)
 
+    # ─── IRPF Auto-detection for B2B invoices ──────────────────────────
+    issuer_nif_raw = raw.get("issuer_nif")
+    client_nif_raw = raw.get("client_nif")
+    issuer_nif = _normalize_tax_id(issuer_nif_raw)
+    client_nif = _normalize_tax_id(client_nif_raw)
+    
+    inferred_irpf = infer_missing_irpf(
+        issuer_nif, client_nif, base_amount, total_amount, tax_lines, ctx
+    )
+    if inferred_irpf:
+        tax_lines.append(inferred_irpf)
+        ctx.record(
+            "tax_lines",
+            raw.get("tax_lines"),
+            tax_lines,
+            "added_inferred_irpf",
+            "normalized",
+        )
+        # Recompute totals after adding IRPF
+        base_amount, total_amount = _fill_amount_gaps(base_amount, total_amount, tax_lines, ctx)
+
+    # ─── VAT Included Inference ────────────────────────────────────────
+    vat_included_raw = raw.get("vat_included")
+    vat_included = _normalize_bool(vat_included_raw)
+    
+    # If not explicitly provided by Gemini, infer from arithmetic
+    if vat_included is None:
+        vat_included = infer_vat_included_from_arithmetic(base_amount, total_amount, tax_lines)
+    
+    _track_transform(ctx, "vat_included", vat_included_raw, vat_included, "normalize_bool_or_infer", "normalized_vat_included")
+
     result: Dict[str, Any] = {
         "issuer_name":    _t("issuer_name",    _normalize_company_name(raw.get("issuer_name")),  "normalize_company_name"),
-        "issuer_nif":     _t("issuer_nif",     _normalize_tax_id(raw.get("issuer_nif")),         "normalize_tax_id"),
+        "issuer_nif":     _t("issuer_nif",     issuer_nif,                                        "normalize_tax_id"),
         "issuer_address": _t("issuer_address", _clean_string(raw.get("issuer_address")),         "clean_string"),
         "issuer_phone":   _t("issuer_phone",   _clean_string(raw.get("issuer_phone")),           "clean_string"),
         "issuer_iban":    _t("issuer_iban",     _clean_string(raw.get("issuer_iban")),            "clean_string"),
@@ -73,14 +107,14 @@ def _normalize_invoice_like(raw: Dict[str, Any], ctx: NormalizationContext, is_s
         "total_amount":   total_amount,
         "tax_lines":      tax_lines,
         "tax_regime":     tax_regime,
-        "vat_included":   raw.get("vat_included"),
+        "vat_included":   vat_included,
         "currency":       _t("currency",       _normalize_currency(raw.get("currency")),         "normalize_currency"),
         "payment_method": _t("payment_method", _clean_string(raw.get("payment_method")),         "clean_string"),
         "document_source": normalize_document_source(raw, ctx),
     }
 
     result["client_name"]    = _t("client_name",    _normalize_company_name(raw.get("client_name")), "normalize_company_name")
-    result["client_nif"]     = _t("client_nif",     _normalize_tax_id(raw.get("client_nif")),        "normalize_tax_id")
+    result["client_nif"]     = _t("client_nif",     client_nif,                                     "normalize_tax_id")
     result["client_address"] = _t("client_address", _clean_string(raw.get("client_address")),        "clean_string")
     result["client_phone"]   = _t("client_phone",   _clean_string(raw.get("client_phone")),          "clean_string")
     result["client_iban"]    = _t("client_iban",     _clean_string(raw.get("client_iban")),           "clean_string")
@@ -89,7 +123,8 @@ def _normalize_invoice_like(raw: Dict[str, Any], ctx: NormalizationContext, is_s
     _validate_tax_ids(result, ctx)
 
     if is_sent:
-        result["payment_status"] = _t("payment_status", _clean_string(raw.get("payment_status")),         "clean_string")
+        result["concept"]           = _t("concept",           _clean_string(raw.get("concept")),                      "clean_string")
+        result["payment_status"]    = _t("payment_status",    _clean_string(raw.get("payment_status")),               "clean_string")
     else:
         result["concept"]              = _t("concept",              _clean_string(raw.get("concept")),                      "clean_string")
         result["billing_period_start"] = _t("billing_period_start", normalize_date(raw.get("billing_period_start")),        "normalize_date")

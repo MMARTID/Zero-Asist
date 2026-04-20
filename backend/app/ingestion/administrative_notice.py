@@ -5,6 +5,7 @@ from typing import Any, Dict
 from app.ingestion.context import NormalizationContext
 from app.ingestion.helpers import (
     _clean_string,
+    _normalize_bool,
     make_field_tracker,
     normalize_date,
     normalize_document_source,
@@ -23,6 +24,6 @@ def normalize_administrative_notice(raw: Dict[str, Any], ctx: NormalizationConte
         "deadline":         _t("deadline",         normalize_date(raw.get("deadline")),         "normalize_date"),
         "expedient_number": _t("expedient_number", _clean_string(raw.get("expedient_number")), "clean_string"),
         "summary":          _t("summary",          _clean_string(raw.get("summary")),           "clean_string"),
-        "has_signed_pdf":   raw.get("has_signed_pdf"),
+        "has_signed_pdf":   _t("has_signed_pdf",   _normalize_bool(raw.get("has_signed_pdf")),  "normalize_bool"),
         "document_source":  normalize_document_source(raw, local_ctx),
     }

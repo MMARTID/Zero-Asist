@@ -11,7 +11,7 @@ from app.ingestion.constants import (
     RETENTION_TAX_TYPES,
     SPANISH_TAX_RATES,
 )
-from app.ingestion.context import NormalizationContext
+from app.ingestion.context import NormalizationContext, ValidationIssue
 from app.models.registry import DOCUMENT_TYPE_REGISTRY
 
 logger = logging.getLogger(__name__)
@@ -158,6 +158,52 @@ def _validate_tax_lines(normalized: Dict[str, Any], ctx: NormalizationContext) -
                 )
 
 
+def _check_vat_included_coherence(normalized: Dict[str, Any], ctx: NormalizationContext) -> None:
+    """Validate that vat_included is coherent with base_amount and total_amount."""
+    vat_included = normalized.get("vat_included")
+    base_amount = normalized.get("base_amount")
+    total_amount = normalized.get("total_amount")
+    tax_lines = normalized.get("tax_lines") or []
+    
+    if vat_included is None or base_amount is None or total_amount is None:
+        return
+    
+    # If vat_included=False: base ≠ total (when taxes exist)
+    if vat_included is False:
+        if tax_lines and abs(base_amount - total_amount) < 0.01:
+            ctx.add_issue(
+                "vat_included",
+                "incoherent_arithmetic_vat_false: base_amount equals total_amount but vat_included=False",
+                "invalid",
+                value=vat_included,
+            )
+    
+    # If vat_included=True: base < total (or base ≈ total if no taxes)
+    elif vat_included is True:
+        if tax_lines and base_amount >= total_amount:
+            ctx.add_issue(
+                "vat_included",
+                "incoherent_arithmetic_vat_true: base_amount >= total_amount but vat_included=True",
+                "invalid",
+                value=vat_included,
+            )
+
+
+def _sanitize_issue_for_logging(issue: ValidationIssue) -> dict:
+    """Redact PII from validation issues before logging."""
+    pii_fields = {"issuer_nif", "client_nif", "iban", "phone", "card_last_digits", "operation_reference"}
+    
+    if any(pii_field in issue.field for pii_field in pii_fields):
+        return {
+            "field": issue.field,
+            "reason": issue.reason,
+            "kind": issue.kind,
+            "value": "[REDACTED]",
+        }
+    
+    return issue.__dict__
+
+
 def _check_type_coherence(
     normalized: Dict[str, Any], document_type: str, ctx: NormalizationContext,
 ) -> None:
@@ -184,18 +230,22 @@ def _check_type_coherence(
 def _finalize_validation(document_type: str, normalized: Dict[str, Any], ctx: NormalizationContext) -> None:
     _validate_required_fields(normalized, document_type, ctx)
     _validate_schema(normalized, document_type, ctx)
-    _cross_check_arithmetic(normalized, ctx)
     _validate_tax_lines(normalized, ctx)
+    _cross_check_arithmetic(normalized, ctx)
+    _check_vat_included_coherence(normalized, ctx)
     _check_type_coherence(normalized, document_type, ctx)
 
     if ctx.issues:
+        # Sanitize issues before logging (redact PII)
+        sanitized_issues = [_sanitize_issue_for_logging(issue) for issue in ctx.issues]
+        
         logger.warning(
             "normalization_issues",
             extra={
                 "document_type": document_type,
                 "strict": ctx.strict,
                 "issue_count": len(ctx.issues),
-                "issues": [issue.__dict__ for issue in ctx.issues],
+                "issues": sanitized_issues,
             },
         )
 

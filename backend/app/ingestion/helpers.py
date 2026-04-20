@@ -8,8 +8,12 @@ from app.ingestion.constants import (
     INVISIBLE_CHARS_RE,
     LEGAL_SUFFIXES_RE,
     NIF_CIF_RE,
+    WHITESPACE_RE,
+    NON_ALPHANUMERIC_RE,
+    NON_NUMERIC_RE,
     PAYMENT_KEYWORDS,
     RATE_SNAP_TOLERANCE,
+    RETENTION_TAX_TYPES,
     SPANISH_TAX_RATES,
     TAX_TYPE_ALIASES,
 )
@@ -21,7 +25,7 @@ def _clean_string(value: Any) -> str | None:
         return None
     text = str(value)
     text = INVISIBLE_CHARS_RE.sub("", text)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = WHITESPACE_RE.sub(" ", text).strip()
     if not text or text.lower() == "null":
         return None
     return text
@@ -31,7 +35,7 @@ def _normalize_tax_id(value: Any) -> str | None:
     text = _clean_string(value)
     if not text:
         return None
-    compact = re.sub(r"[^A-Za-z0-9]", "", text).upper()
+    compact = NON_ALPHANUMERIC_RE.sub("", text).upper()
     if not NIF_CIF_RE.match(compact):
         return None
     return compact
@@ -48,6 +52,29 @@ def _normalize_currency(value: Any) -> str:
     if re.match(r"^[A-Za-z]{3}$", text):
         return text.upper()
     return "EUR"
+
+
+def _normalize_bool(value: Any, default: bool | None = None) -> bool | None:
+    """Normalize boolean values from various sources (Gemini, strings, etc.).
+    
+    Handles:
+    - Python bool: True/False
+    - String variations: "true", "false", "yes", "no", "1", "0"
+    - None → default parameter
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.lower().strip()
+        if text in ("true", "yes", "1", "incluido", "included"):
+            return True
+        if text in ("false", "no", "0", "no incluido", "not included"):
+            return False
+    if isinstance(value, int):
+        return bool(value)
+    return default
 
 
 def _normalize_company_name(value: Any) -> str | None:
@@ -171,7 +198,7 @@ def normalize_number(value: Any) -> float | None:
         raw = raw[1:]
 
     compact = raw.replace(" ", "")
-    compact = re.sub(r"[^0-9,\.]", "", compact)
+    compact = NON_NUMERIC_RE.sub("", compact)
 
     if not compact:
         return None
@@ -371,3 +398,121 @@ def normalize_tax_block(
     tax_lines = normalize_tax_lines(raw.get("tax_lines"), base_amount, ctx)
     tax_regime = infer_tax_regime(tax_lines)
     return tax_lines, tax_regime
+
+
+# ---------------------------------------------------------------------------
+# VAT and IRPF inference helpers
+# ---------------------------------------------------------------------------
+
+def infer_vat_included_from_arithmetic(
+    base_amount: float | None,
+    total_amount: float | None,
+    tax_lines: list[dict] | None,
+) -> bool | None:
+    """Infer vat_included from arithmetic: base + taxes - retentions ≈ total means FALSE; total=base means FALSE.
+    
+    Returns:
+        True if taxes are included in total, False if not, None if cannot determine.
+    """
+    if not base_amount or not total_amount or not tax_lines:
+        return None
+    
+    # If base_amount ≈ total_amount (no taxes), return None as undeterminable
+    if abs(base_amount - total_amount) < 0.01:
+        return None
+    
+    sum_additive = sum(
+        tl.get("amount", 0) for tl in tax_lines
+        if isinstance(tl, dict) and tl.get("tax_type") in ADDITIVE_TAX_TYPES
+    )
+    sum_retention = sum(
+        tl.get("amount", 0) for tl in tax_lines
+        if isinstance(tl, dict) and tl.get("tax_type") in RETENTION_TAX_TYPES
+    )
+    
+    # If vat_included=False: expected = base + taxes - retentions
+    expected_if_excluded = base_amount + sum_additive - sum_retention
+    # If vat_included=True: expected = total (base already includes taxes)
+    expected_if_included = base_amount + sum_retention  # Only subtract retentions
+    
+    tolerance = max(0.01, abs(total_amount) * 0.001)  # 0.1% tolerance
+    
+    if abs(expected_if_excluded - total_amount) < tolerance:
+        return False  # Taxes excluded: base + taxes = total
+    elif abs(base_amount + sum_retention - total_amount) < tolerance:
+        return True   # Taxes included: base (which includes taxes) + retentions = total
+    
+    return None
+
+
+def infer_missing_irpf(
+    issuer_nif: str | None,
+    client_nif: str | None,
+    base_amount: float | None,
+    total_amount: float | None,
+    tax_lines: list[dict] | None,
+    ctx: NormalizationContext | None = None,
+) -> dict | None:
+    """Auto-detect missing IRPF line for B2B invoices from natural persons.
+    
+    Spanish tax rule: B2B freelancers (DNI+CIF) must have 15% IRPF retention.
+    Detects: issuer=person, client=company, but no IRPF line → infer it.
+    
+    Returns:
+        A normalized tax_line dict for IRPF, or None if not applicable.
+    """
+    from app.ingestion.constants import NIF_CIF_RE
+    
+    if not issuer_nif or not client_nif or not base_amount or not total_amount:
+        return None
+    
+    tax_lines = tax_lines or []
+    
+    # Check if IRPF already exists
+    if any(tl.get("tax_type") == "irpf" for tl in tax_lines if isinstance(tl, dict)):
+        return None
+    
+    # Check: issuer is natural person (DNI-like: 8 digits + letter), client is company (CIF-like)
+    issuer_clean = issuer_nif.replace("-", "").upper()
+    client_clean = client_nif.replace("-", "").upper()
+    
+    # Simple heuristic: DNI is 8 digits + letter at end; CIF is letter + 7-8 digits
+    is_issuer_person = (
+        len(issuer_clean) == 9 and issuer_clean[:8].isdigit() and issuer_clean[8].isalpha()
+    )
+    is_client_company = (
+        len(client_clean) >= 8 and client_clean[0].isalpha() and client_clean[1:].replace("0", "").isalnum()
+    )
+    
+    if not (is_issuer_person and is_client_company):
+        return None
+    
+    # Detect descuadre: base + IVA - IRPF = total
+    # If descuadre ≈ base × 15%, infer IRPF
+    sum_iva = sum(
+        tl.get("amount", 0) for tl in tax_lines
+        if isinstance(tl, dict) and tl.get("tax_type") == "iva"
+    )
+    
+    expected_with_irpf_15 = base_amount + sum_iva - (base_amount * 0.15)
+    tolerance = max(0.01, abs(base_amount) * 0.01)
+    
+    if abs(expected_with_irpf_15 - total_amount) < tolerance:
+        irpf_amount = round(base_amount * 0.15, 2)
+        inferred_line = {
+            "tax_type": "irpf",
+            "rate": 15.0,
+            "base_amount": base_amount,
+            "amount": irpf_amount,
+        }
+        if ctx:
+            ctx.record(
+                "tax_lines[inferred_irpf]",
+                None,
+                inferred_line,
+                "infer_missing_irpf",
+                "normalized",
+            )
+        return inferred_line
+    
+    return None

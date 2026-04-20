@@ -1,5 +1,5 @@
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List
 
 
@@ -85,6 +85,7 @@ class InvoiceSentExtraction(BaseModel):
     total_amount: Optional[float] = None
     tax_lines: List[TaxLine] = Field(default_factory=list)
     currency: Optional[str] = None
+    concept: Optional[str] = None
     payment_status: Optional[str] = None
     payment_method: Optional[str] = None
     tax_regime: Optional[str] = None
@@ -163,3 +164,7 @@ class ExpenseTicketExtraction(BaseModel):
 
 
 
+
+class OtherExtraction(BaseModel):
+    """Generic schema for unclassified documents — preserves all extracted fields."""
+    model_config = ConfigDict(extra="allow")

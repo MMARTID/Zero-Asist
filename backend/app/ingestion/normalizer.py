@@ -25,6 +25,7 @@ from app.models.document import (
     ExpenseTicketExtraction,
     InvoiceReceivedExtraction,
     InvoiceSentExtraction,
+    OtherExtraction,
     PaymentReceiptExtraction,
 )
 from app.models.registry import (
@@ -44,6 +45,7 @@ from app.ingestion.context import (  # noqa: F401
 from app.ingestion.helpers import (  # noqa: F401
     _clean_string,
     _detect_payment_method,
+    _normalize_bool,
     _normalize_company_name,
     _normalize_currency,
     _normalize_single_tax_line,
@@ -107,19 +109,22 @@ _PROMPT_INVOICE_RECEIVED = (
     "IMPORTANTE: Si el emisor es una persona física (NIF con formato de DNI, ej. 12345678A) "
     "y el receptor es una empresa, busca obligatoriamente la línea de retención de IRPF, "
     "incluso si no está explícitamente etiquetada. Detecta el descuadre entre "
-    "Base Imponible + IVA y el Total para inferir la retención de IRPF."
+    "Base Imponible + IVA y el Total para inferir la retención de IRPF. "
+    "Especifica vat_included como true/false: ¿el IVA/impuestos están incluidos en el total?"
 )
 
 _PROMPT_INVOICE_SENT = (
     "Eres un experto contable español. Analiza esta factura emitida (ingreso) y extrae todos los datos disponibles. "
     "Busca: nombre y NIF/CIF del emisor, nombre y NIF/CIF del cliente, "
     "número de factura, fecha de emisión, base imponible, importe total, moneda, "
+    "concepto o descripción del servicio/producto, "
     "estado del pago (pendiente, cobrada, etc.), forma de pago, "
     "y origen del documento. "
     "Para cada impuesto o retención que aparezca "
     "(IVA, recargo de equivalencia, IGIC, IPSI, IRPF u otro), "
     "extrae una línea en tax_lines con: tipo de impuesto (tax_type), "
-    "porcentaje (rate), base imponible de esa línea (base_amount) y cuota (amount)."
+    "porcentaje (rate), base imponible de esa línea (base_amount) y cuota (amount). "
+    "Especifica vat_included como true/false: ¿el IVA/impuestos están incluidos en el total?"
 )
 
 _PROMPT_PAYMENT_RECEIPT = (
@@ -199,8 +204,10 @@ def normalize_document_with_report(
 
     if not isinstance(data, dict):
         ctx.add_issue("data", "expected_dict", "invalid", value=data)
+        # In strict mode, fail immediately on type error
         if strict:
             _finalize_validation(document_type, {}, ctx)
+        # Otherwise, reset data to empty dict and continue
         data = {}
 
     config = DOCUMENT_TYPE_REGISTRY.get(document_type)
@@ -236,7 +243,7 @@ register_document_type(DocumentTypeConfig(
     document_type="invoice_received",
     normalizer=normalize_invoice_received,
     schema=InvoiceReceivedExtraction,
-    required_fields=["issuer_name", "invoice_number", "total_amount"],
+    required_fields=["issuer_name", "issuer_nif", "invoice_number", "total_amount"],
     extraction_schema=InvoiceReceivedExtraction,
     prompt=_PROMPT_INVOICE_RECEIVED,
 ))
@@ -244,7 +251,7 @@ register_document_type(DocumentTypeConfig(
     document_type="invoice_sent",
     normalizer=normalize_invoice_sent,
     schema=InvoiceSentExtraction,
-    required_fields=["issuer_name", "client_name", "invoice_number", "total_amount"],
+    required_fields=["issuer_name", "issuer_nif", "client_name", "client_nif", "invoice_number", "total_amount"],
     extraction_schema=InvoiceSentExtraction,
     prompt=_PROMPT_INVOICE_SENT,
 ))
@@ -287,4 +294,13 @@ register_document_type(DocumentTypeConfig(
     required_fields=["total_amount"],
     extraction_schema=ExpenseTicketExtraction,
     prompt=_PROMPT_EXPENSE_TICKET,
+))
+
+register_document_type(DocumentTypeConfig(
+    document_type="other",
+    normalizer=normalize_generic,
+    schema=OtherExtraction,
+    required_fields=[],
+    extraction_schema=None,
+    prompt="Extrae todos los datos disponibles del documento sin hacer suposiciones sobre su tipo.",
 ))

@@ -196,6 +196,7 @@ def save_document(
         "normalized_data": normalized_dict,
         "extracted_data": extracted_data,
         "created_at": datetime.now(timezone.utc),
+        "review_status": "pending",
     }
     if extra:
         record.update(extra)
