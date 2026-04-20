@@ -1,6 +1,7 @@
 "use client";
 
 import { useAuth } from "@/lib/auth-context";
+import { logError } from "@/lib/logger";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -22,7 +23,7 @@ export default function LoginPage() {
     try {
       await signIn();
     } catch (e) {
-      console.error("Google sign-in error:", e);
+      logError("Google sign-in error", e);
       setError("No se pudo iniciar sesión con Google");
     } finally {
       setSubmitting(false);

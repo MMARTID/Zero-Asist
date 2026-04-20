@@ -2,6 +2,7 @@
 
 import { useAuth } from "@/lib/auth-context";
 import { updateGestoriaProfile } from "@/lib/api";
+import { logError } from "@/lib/logger";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -11,6 +12,7 @@ export default function OnboardingPage() {
 
   const [nombre, setNombre] = useState("");
   const [phone, setPhone] = useState("");
+  const [software, setSoftware] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -18,6 +20,7 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (gestoria && !nombre) {
       setNombre(gestoria.nombre || "");
+      setSoftware(gestoria.gestoria_software || "");
     }
   }, [gestoria, nombre]);
 
@@ -48,14 +51,18 @@ export default function OnboardingPage() {
       setError("El número de WhatsApp Business es obligatorio");
       return;
     }
+    if (!software) {
+      setError("Por favor selecciona un software contable");
+      return;
+    }
 
     setSubmitting(true);
     try {
-      await updateGestoriaProfile(trimmedNombre, trimmedPhone);
+      await updateGestoriaProfile(trimmedNombre, trimmedPhone, software);
       await refreshGestoria();
       router.replace("/dashboard");
     } catch (err) {
-      console.error("Onboarding error:", err);
+      logError("Onboarding error", err);
       setError("No se pudo guardar. Inténtalo de nuevo.");
     } finally {
       setSubmitting(false);
@@ -132,6 +139,27 @@ export default function OnboardingPage() {
               />
               <p className="mt-1.5 text-xs text-muted">
                 Este número se usará para enviar enlaces a tus clientes por WhatsApp
+              </p>
+            </div>
+
+            {/* Software Contable */}
+            <div>
+              <label htmlFor="software" className="mb-1.5 block text-sm font-medium text-foreground">
+                Software Contable
+              </label>
+              <select
+                id="software"
+                value={software}
+                onChange={(e) => setSoftware(e.target.value)}
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm text-foreground shadow-sm bg-white focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
+              >
+                <option value="">-- Selecciona un software --</option>
+                <option value="holded">Holded</option>
+                <option value="A3">A3</option>
+                <option value="sage">Sage</option>
+              </select>
+              <p className="mt-1.5 text-xs text-muted">
+                Esto nos ayuda a optimizar la integración con tu gestoría
               </p>
             </div>
 

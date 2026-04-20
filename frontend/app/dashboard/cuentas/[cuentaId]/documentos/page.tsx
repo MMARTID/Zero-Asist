@@ -68,59 +68,39 @@ export default function DocumentosPage() {
           <p className="mt-3 text-sm font-medium text-muted">No hay documentos procesados aún</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {documents.map((doc) => (
             <div
               key={doc.doc_hash}
-              className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-black/5"
+              className="group rounded-xl bg-white p-4 shadow-sm ring-1 ring-black/5 transition-all hover:shadow-md hover:ring-black/10"
             >
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <p className="font-medium text-foreground">
-                    {doc.filename || doc.doc_hash.slice(0, 12)}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${DOC_TYPE_COLORS[doc.document_type ?? ""] ?? "bg-gray-50 text-gray-600 ring-gray-200"}`}>
-                      {DOC_TYPE_LABELS[doc.document_type ?? ""] ?? doc.document_type ?? "Desconocido"}
-                    </span>
-                    {!!doc.normalized?.invoice_number && (
-                      <span className="text-xs text-muted">Nº {String(doc.normalized.invoice_number)}</span>
-                    )}
-                  </div>
-                  {doc.normalized && (
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-                      {!!(doc.normalized as Record<string, unknown>).issuer_name && (
-                        <span>
-                          <span className="text-gray-400">Emisor:</span>{" "}
-                          {String((doc.normalized as Record<string, unknown>).issuer_name)}
-                          {!!(doc.normalized as Record<string, unknown>).issuer_nif && (
-                            <span className="ml-1 font-mono text-gray-400">
-                              ({String((doc.normalized as Record<string, unknown>).issuer_nif)})
-                            </span>
-                          )}
+              {/* Header: Type + Filename + Amount */}
+              <div className="flex items-start justify-between gap-4 mb-2">
+                <div className="flex items-start gap-3 min-w-0 flex-1">
+                  <span className={`inline-flex shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 mt-0.5 ${DOC_TYPE_COLORS[doc.document_type ?? ""] ?? "bg-gray-50 text-gray-600 ring-gray-200"}`}>
+                    {DOC_TYPE_LABELS[doc.document_type ?? ""]?.slice(0, 12) ?? "Otro"}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-semibold text-foreground leading-snug">
+                      {doc.filename || doc.doc_hash.slice(0, 16)}
+                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      {!!doc.normalized?.invoice_number && (
+                        <span className="text-xs text-gray-500 font-medium">
+                          Nº {String(doc.normalized.invoice_number)}
                         </span>
                       )}
-                      {!!(doc.normalized as Record<string, unknown>).client_name && (
-                        <span>
-                          <span className="text-gray-400">Cliente:</span>{" "}
-                          {String((doc.normalized as Record<string, unknown>).client_name)}
-                          {!!(doc.normalized as Record<string, unknown>).client_nif && (
-                            <span className="ml-1 font-mono text-gray-400">
-                              ({String((doc.normalized as Record<string, unknown>).client_nif)})
-                            </span>
-                          )}
+                      {doc.created_at && (
+                        <span className="text-xs text-gray-400">
+                          {new Date(doc.created_at).toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "2-digit" })}
                         </span>
                       )}
                     </div>
-                  )}
-                  {doc.created_at && (
-                    <p className="text-xs text-muted">
-                      {new Date(doc.created_at).toLocaleString("es-ES")}
-                    </p>
-                  )}
+                  </div>
                 </div>
+
                 {doc.normalized?.total_amount != null && (
-                  <span className="text-xl font-bold tracking-tight text-foreground">
+                  <span className="shrink-0 text-lg font-bold tracking-tight text-foreground tabular-nums">
                     {Number(doc.normalized.total_amount).toLocaleString("es-ES", {
                       style: "currency",
                       currency: "EUR",
@@ -129,19 +109,54 @@ export default function DocumentosPage() {
                 )}
               </div>
 
+              {/* Extracted info row */}
               {doc.normalized && (
-                <details className="mt-4 group">
-                  <summary className="inline-flex cursor-pointer items-center gap-1 text-sm font-medium text-brand hover:text-brand-dark">
-                    <svg className="h-3.5 w-3.5 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                    </svg>
-                    Ver datos extraídos
-                  </summary>
-                  <pre className="mt-3 overflow-auto rounded-lg bg-gray-50 p-4 text-xs text-muted ring-1 ring-black/5">
-                    {JSON.stringify(doc.normalized, null, 2)}
-                  </pre>
-                </details>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600 mb-3 px-0.5">
+                  {!!(doc.normalized as Record<string, unknown>).issuer_name && (
+                    <span>
+                      <span className="text-gray-400">Emisor:</span>{" "}
+                      <span className="font-medium text-foreground">
+                        {String((doc.normalized as Record<string, unknown>).issuer_name)?.slice(0, 30)}
+                      </span>
+                    </span>
+                  )}
+                  {!!(doc.normalized as Record<string, unknown>).client_name && (
+                    <span>
+                      <span className="text-gray-400">Cliente:</span>{" "}
+                      <span className="font-medium text-foreground">
+                        {String((doc.normalized as Record<string, unknown>).client_name)?.slice(0, 30)}
+                      </span>
+                    </span>
+                  )}
+                </div>
               )}
+
+              {/* Actions footer */}
+              <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                {doc.normalized && (
+                  <details className="group/details">
+                    <summary className="inline-flex cursor-pointer items-center gap-1 text-xs font-medium text-brand hover:text-brand-dark transition-colors">
+                      <svg className="h-3.5 w-3.5 shrink-0 transition-transform group-open/details:rotate-90" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                      </svg>
+                      Datos
+                    </summary>
+                    <pre className="mt-2 overflow-auto rounded-lg bg-gray-50 p-3 text-xs text-gray-600 ring-1 ring-black/5 max-h-40">
+                      {JSON.stringify(doc.normalized, null, 2)}
+                    </pre>
+                  </details>
+                )}
+                
+                <Link
+                  href={`/dashboard/review/${cuentaId}/${doc.doc_hash}`}
+                  className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-600 to-indigo-700 px-3 py-1.5 text-xs font-semibold text-white transition-all hover:shadow-md hover:from-indigo-700 hover:to-indigo-800 active:scale-95"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0l-3-3m3 3L18 6" />
+                  </svg>
+                  Revisar
+                </Link>
+              </div>
             </div>
           ))}
         </div>

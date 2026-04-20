@@ -11,18 +11,22 @@ export default function ConfiguracionPage() {
 
   const [nombre, setNombre] = useState("");
   const [phone, setPhone] = useState("");
+  const [software, setSoftware] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (profile) {
       setNombre(profile.nombre);
       setPhone(profile.phone_number);
+      setSoftware(profile.gestoria_software || "");
     }
   }, [profile]);
 
   const dirty =
     profile != null &&
-    (nombre !== profile.nombre || phone !== profile.phone_number);
+    (nombre !== profile.nombre || 
+     phone !== profile.phone_number ||
+     software !== (profile.gestoria_software || ""));
 
   async function handleSave() {
     if (!nombre.trim()) {
@@ -31,7 +35,7 @@ export default function ConfiguracionPage() {
     }
     setSaving(true);
     try {
-      await updateGestoriaSettings(nombre.trim(), phone.trim());
+      await updateGestoriaSettings(nombre.trim(), phone.trim(), software || undefined);
       toast.success("Configuración guardada");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error al guardar");
@@ -84,6 +88,21 @@ export default function ConfiguracionPage() {
               placeholder="+34 600 000 000"
               className="w-full rounded-lg border-0 bg-gray-50 px-3 py-2 text-sm text-foreground ring-1 ring-black/5 placeholder:text-gray-400 focus:bg-white focus:ring-2 focus:ring-brand/30 focus:outline-none"
             />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-muted mb-1">
+              Software Contable
+            </label>
+            <select
+              value={software}
+              onChange={(e) => setSoftware(e.target.value)}
+              className="w-full rounded-lg border-0 bg-gray-50 px-3 py-2 text-sm text-foreground ring-1 ring-black/5 focus:bg-white focus:ring-2 focus:ring-brand/30 focus:outline-none"
+            >
+              <option value="">-- Sin especificar --</option>
+              <option value="holded">Holded</option>
+              <option value="A3">A3</option>
+              <option value="sage">Sage</option>
+            </select>
           </div>
         </div>
         <div className="flex items-center gap-3 border-t border-border px-5 py-3">

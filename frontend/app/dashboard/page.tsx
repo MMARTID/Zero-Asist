@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useState } from "react";
 import { useStats, useAlerts, dismissAlert, type Alert } from "@/lib/api";
 import { toast } from "sonner";
+import { useModalParam } from "@/lib/use-modal-param";
+import CreateCuentaModal from "@/components/create-cuenta-modal";
 
 const CARD_CONFIG = [
   {
@@ -54,6 +56,7 @@ const CARD_CONFIG = [
 
 export default function DashboardPage() {
   const { data: stats, error: swrError } = useStats();
+  const { openModal } = useModalParam("crear-cuenta");
   const error = swrError?.message ?? "";
 
   if (error) {
@@ -91,13 +94,24 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-foreground">
-          Dashboard
-        </h2>
-        <p className="mt-1 text-sm text-muted">
-          Resumen general de tu gestoría
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-foreground">
+            Dashboard
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            Resumen general de tu gestoría
+          </p>
+        </div>
+        <button
+          onClick={() => openModal()}
+          className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-brand-dark shadow-brand/25 transition-colors"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          Nueva cuenta
+        </button>
       </div>
 
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
@@ -119,20 +133,9 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Quick actions */}
-      <div className="flex flex-wrap gap-3">
-        <Link
-          href="/dashboard/cuentas"
-          className="inline-flex items-center gap-2 rounded-lg bg-brand px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-brand-dark shadow-brand/25"
-        >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-          Nueva cuenta
-        </Link>
-      </div>
-
       <AlertsPanel />
+
+      <CreateCuentaModal />
     </div>
   );
 }
@@ -149,6 +152,7 @@ const DOC_TYPE_LABELS: Record<string, { label: string; color: string }> = {
   bank_document:         { label: "Extracto bancario", color: "bg-cyan-50 text-cyan-700" },
   contract:              { label: "Contrato",          color: "bg-slate-100 text-slate-700" },
   administrative_notice: { label: "Notificación",      color: "bg-red-50 text-red-700" },
+  other:                 { label: "Otro documento",    color: "bg-gray-100 text-gray-700" },
 };
 
 function relativeTime(isoStr: string | null): string {
@@ -174,7 +178,7 @@ function AlertRow({ alert, onDismiss }: { alert: Alert; onDismiss: (a: Alert) =>
   return (
     <div className="group flex items-start gap-4 rounded-xl px-4 py-3.5 transition-colors hover:bg-amber-50/60">
       <Link
-        href={`/dashboard/cuentas/${alert.cuenta_id}?tab=documentos`}
+        href={`/dashboard/review/${alert.cuenta_id}/${alert.doc_hash}`}
         className="flex flex-1 items-start gap-4"
       >
         {/* Warning dot */}

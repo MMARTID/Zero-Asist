@@ -1,15 +1,17 @@
 "use client";
 
-import { useClients, createClient, revalidatePrefix } from "@/lib/api";
 import Link from "next/link";
-import { FormEvent, useState, useMemo } from "react";
-import { toast } from "sonner";
+import { useClients, revalidatePrefix } from "@/lib/api";
+import { useState, useMemo } from "react";
+import { useModalParam } from "@/lib/use-modal-param";
+import CreateCuentaModal from "@/components/create-cuenta-modal";
 
 type SortKey = "nombre" | "tax_id" | "gmail_watch_status";
 type SortDir = "asc" | "desc";
 
 export default function ClientesPage() {
   const { data, error: swrError, isLoading } = useClients();
+  const { openModal } = useModalParam("crear-cuenta");
   const clients = data?.cuentas ?? [];
   const [error, setError] = useState("");
 
@@ -47,31 +49,6 @@ export default function ClientesPage() {
     });
   }, [clients, search, sortKey, sortDir]);
 
-  // New client form
-  const [showForm, setShowForm] = useState(false);
-  const [nombre, setNombre] = useState("");
-  const [phone, setPhone] = useState("");
-  const [taxId, setTaxId] = useState("");
-  const [creating, setCreating] = useState(false);
-
-  async function handleCreate(e: FormEvent) {
-    e.preventDefault();
-    setCreating(true);
-    try {
-      await createClient(nombre, phone, taxId);
-      setNombre("");
-      setPhone("");
-      setTaxId("");
-      setShowForm(false);
-      revalidatePrefix("/dashboard");
-      toast.success("Cuenta creada correctamente");
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Error al crear cuenta");
-    } finally {
-      setCreating(false);
-    }
-  }
-
   const displayError = error || swrError?.message || "";
 
   return (
@@ -84,28 +61,13 @@ export default function ClientesPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowForm(!showForm)}
-          className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium shadow-sm ${
-            showForm
-              ? "bg-gray-100 text-muted hover:bg-gray-200"
-              : "bg-brand text-white hover:bg-brand-dark shadow-brand/25"
-          }`}
+          onClick={() => openModal()}
+          className="flex items-center gap-2 rounded-lg bg-brand text-white hover:bg-brand-dark shadow-sm shadow-brand/25 px-4 py-2.5 text-sm font-medium transition-colors"
         >
-          {showForm ? (
-            <>
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-              Cancelar
-            </>
-          ) : (
-            <>
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-              </svg>
-              Nueva cuenta
-            </>
-          )}
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          Nueva cuenta
         </button>
       </div>
 
@@ -115,47 +77,7 @@ export default function ClientesPage() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
           </svg>
           {displayError}
-        </div>
-      )}
-
-      {showForm && (
-        <form
-          onSubmit={handleCreate}
-          className="mb-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-black/5"
-        >
-          <p className="mb-4 text-sm font-medium text-foreground">Nueva cuenta</p>
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <input
-              placeholder="Nombre de la empresa"
-              required
-              value={nombre}
-              onChange={(e) => setNombre(e.target.value)}
-              className="flex-1 rounded-lg border border-border bg-white px-3 py-2.5 text-sm placeholder:text-gray-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-            />
-            <input
-              placeholder="NIF / CIF"
-              required
-              value={taxId}
-              onChange={(e) => setTaxId(e.target.value)}
-              className="w-full sm:w-40 rounded-lg border border-border bg-white px-3 py-2.5 text-sm placeholder:text-gray-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-            />
-            <input
-              type="tel"
-              placeholder="Teléfono de contacto"
-              required
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              className="flex-1 rounded-lg border border-border bg-white px-3 py-2.5 text-sm placeholder:text-gray-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-            />
-            <button
-              type="submit"
-              disabled={creating}
-              className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
-            >
-              {creating ? "Creando…" : "Crear"}
-            </button>
-          </div>
-        </form>
+        </div> 
       )}
 
       {isLoading && !data ? (
@@ -275,6 +197,8 @@ export default function ClientesPage() {
           )}
         </>
       )}
+
+      <CreateCuentaModal />
     </div>
   );
 }

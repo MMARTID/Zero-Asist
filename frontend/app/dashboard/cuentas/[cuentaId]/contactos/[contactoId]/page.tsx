@@ -263,33 +263,46 @@ export default function ContactoDetailPage() {
               {documents.map((doc) => (
                 <div
                   key={doc.doc_hash}
-                  className="flex items-center justify-between rounded-lg bg-gray-50/50 px-4 py-3 text-sm ring-1 ring-black/5"
+                  className="group flex items-center justify-between rounded-lg bg-white px-4 py-3 text-sm ring-1 ring-black/5 transition-colors hover:bg-gray-50"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex flex-1 items-center gap-3 min-w-0">
                     <span className={`inline-flex shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${DOC_TYPE_COLORS[doc.document_type ?? ""] ?? "bg-gray-50 text-gray-600 ring-gray-200"}`}>
                       {DOC_TYPE_LABELS[doc.document_type ?? ""] ?? doc.document_type ?? "Desconocido"}
                     </span>
-                    <span className="text-muted truncate">
-                      {doc.filename || doc.doc_hash.slice(0, 12)}
-                    </span>
-                    {!!doc.normalized?.invoice_number && (
-                      <span className="shrink-0 text-xs text-gray-400">Nº {String(doc.normalized.invoice_number)}</span>
-                    )}
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <span className="font-medium text-foreground truncate">
+                        {doc.filename || doc.doc_hash.slice(0, 12)}
+                      </span>
+                      <div className="flex items-center gap-2 text-xs text-muted">
+                        {!!doc.normalized?.invoice_number && (
+                          <span>Nº {String(doc.normalized.invoice_number)}</span>
+                        )}
+                        {doc.created_at && (
+                          <span>
+                            {new Date(doc.created_at).toLocaleDateString("es-ES")}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-4 text-right shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     {doc.normalized?.total_amount != null && (
-                      <span className="font-semibold text-foreground">
+                      <span className="font-semibold text-foreground hidden sm:inline">
                         {Number(doc.normalized.total_amount).toLocaleString("es-ES", {
                           style: "currency",
                           currency: "EUR",
                         })}
                       </span>
                     )}
-                    {doc.created_at && (
-                      <span className="text-xs text-muted">
-                        {new Date(doc.created_at).toLocaleDateString("es-ES")}
-                      </span>
-                    )}
+                    <Link
+                      href={`/dashboard/review/${cuentaId}/${doc.doc_hash}`}
+                      className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700 whitespace-nowrap"
+                    >
+                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                      </svg>
+                      Revisar
+                    </Link>
                   </div>
                 </div>
               ))}

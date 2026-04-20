@@ -303,49 +303,67 @@ export default function DocumentosGlobalPage() {
                   )}
                 </div>
 
-                {/* Actions */}
-                {doc.has_original && (
-                  <div className="mt-3">
-                    <button
-                      onClick={() => handleViewOriginal(doc)}
-                      disabled={downloadingDoc === doc.doc_hash}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-brand/10 px-3 py-1.5 text-sm font-medium text-brand transition-colors hover:bg-brand/20 disabled:opacity-50"
-                    >
-                      {downloadingDoc === doc.doc_hash ? (
-                        <svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle
-                            className="opacity-25"
-                            cx="12"
-                            cy="12"
-                            r="10"
-                            stroke="currentColor"
-                            strokeWidth="4"
-                          />
-                          <path
-                            className="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                          />
-                        </svg>
+                {/* Actions - Clean layout */}
+                <div className="mt-3 flex items-center justify-between">
+                  {/* Status badge */}
+                  {doc.review_status && (
+                    <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                      doc.review_status === "reviewed"
+                        ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                        : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                    }`}>
+                      {doc.review_status === "reviewed" ? (
+                        <>
+                          <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
+                          </svg>
+                          Revisada
+                        </>
                       ) : (
-                        <svg
-                          className="h-3.5 w-3.5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          strokeWidth={2}
-                          stroke="currentColor"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
-                          />
-                        </svg>
+                        <>
+                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          Pendiente
+                        </>
                       )}
-                      Ver original
-                    </button>
+                    </span>
+                  )}
+                  
+                  {/* Primary action + menu */}
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={`/dashboard/review/${doc.cuenta_id}/${doc.doc_hash}`}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 active:bg-indigo-800"
+                    >
+                      Revisar
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                      </svg>
+                    </Link>
+                    
+                    {/* Secondary actions menu */}
+                    {doc.has_original && (
+                      <button
+                        onClick={() => handleViewOriginal(doc)}
+                        disabled={downloadingDoc === doc.doc_hash}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white"
+                        title="Descargar documento original"
+                      >
+                        {downloadingDoc === doc.doc_hash ? (
+                          <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                          </svg>
+                        ) : (
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                        )}
+                      </button>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
             );
           })}

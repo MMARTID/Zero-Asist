@@ -933,6 +933,24 @@ export default function CuentaDetailPage() {
                       )}
                     </div>
                     <div className="mt-4 flex flex-wrap items-center gap-3">
+                      {doc.review_status && (
+                        <span className={`inline-block px-2 py-1 rounded text-xs font-semibold ${
+                          doc.review_status === "reviewed"
+                            ? "bg-green-100 text-green-800"
+                            : "bg-orange-100 text-orange-800"
+                        }`}>
+                          {doc.review_status === "reviewed" ? "✓ Revisada" : "Pendiente"}
+                        </span>
+                      )}
+                      <Link
+                        href={`/dashboard/review/${cuentaId}/${doc.doc_hash}`}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-100 px-3 py-1.5 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-200"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Revisar
+                      </Link>
                       {doc.has_original && (
                         <button
                           onClick={() => handleViewOriginal(doc.doc_hash)}
