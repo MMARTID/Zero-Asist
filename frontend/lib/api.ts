@@ -34,6 +34,7 @@ async function swrFetcher<T>(path: string): Promise<T> {
 /**
  * Fetches the original file for a document and opens it in a new tab.
  * Uses a blob URL so the auth header is included in the request.
+ * Revokes the blob URL immediately after opening to prevent memory leaks.
  */
 export async function openDocumentOriginal(
   cuentaId: string,
@@ -52,8 +53,15 @@ export async function openDocumentOriginal(
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
+  
+  // Open in new tab first, then immediately revoke the blob URL
+  // The browser caches the content, so revocation is safe after window.open()
   window.open(url, "_blank");
-  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  
+  // Use requestAnimationFrame to ensure open() completes before revocation
+  requestAnimationFrame(() => {
+    URL.revokeObjectURL(url);
+  });
 }
 
 // ---- Gestoría Profile ----
@@ -62,6 +70,7 @@ export interface GestoriaProfile {
   gestoria_id: string;
   nombre: string;
   phone_number: string;
+  gestoria_software?: string;
   onboarding_complete: boolean;
 }
 
@@ -69,10 +78,10 @@ export function fetchGestoriaProfile() {
   return request<GestoriaProfile>("/dashboard/gestoria");
 }
 
-export function updateGestoriaProfile(nombre: string, phone_number: string) {
+export function updateGestoriaProfile(nombre: string, phone_number: string, gestoria_software?: string) {
   return request<GestoriaProfile>("/dashboard/gestoria", {
     method: "PATCH",
-    body: JSON.stringify({ nombre, phone_number }),
+    body: JSON.stringify({ nombre, phone_number, gestoria_software }),
   });
 }
 
@@ -104,6 +113,7 @@ export interface Document {
   normalized: Record<string, unknown> | null;
   contact_refs?: ContactRef[];
   has_original?: boolean;
+  review_status?: string; // "pending" | "reviewed"
 }
 
 export interface GlobalDocument extends Document {
@@ -231,6 +241,47 @@ export function createClient(nombre: string, phone_number: string, tax_id: strin
   );
 }
 
+export interface AnalyzeImportResponse {
+  mapping: Record<string, string>;
+  normalized_rows: Array<{
+    nombre_fiscal: string;
+    tax_id: string;
+    phone_number: string;
+    email_contacto?: string;
+    direccion_fiscal?: string;
+    codigo_postal?: string;
+    confidence?: Record<string, number>;
+  }>;
+  warnings: string[];
+}
+
+export function analyzeImport(headers: string[], rows: string[][]) {
+  return request<AnalyzeImportResponse>(
+    "/onboarding/cuentas/import/analyze",
+    { method: "POST", body: JSON.stringify({ headers, rows }) }
+  );
+}
+
+export interface BulkCreateResponse {
+  created: number;
+  skipped: number;
+  errors: Array<{ index: number; message: string }>;
+}
+
+export function bulkCreateClients(cuentas: Array<{
+  nombre_fiscal: string;
+  tax_id: string;
+  phone_number: string;
+  email_contacto?: string;
+  direccion_fiscal?: string;
+  codigo_postal?: string;
+}>) {
+  return request<BulkCreateResponse>(
+    "/onboarding/cuentas/bulk",
+    { method: "POST", body: JSON.stringify({ cuentas }) }
+  );
+}
+
 export async function getGmailAuthorizeUrl(cuentaId: string): Promise<string> {
   const data = await request<{ authorization_url: string }>(
     `/onboarding/gmail/authorize/${cuentaId}`
@@ -254,10 +305,11 @@ export function useGestoriaProfile(enabled = true) {
 export async function updateGestoriaSettings(
   nombre: string,
   phone_number: string,
+  gestoria_software?: string,
 ): Promise<void> {
   await request("/dashboard/gestoria", {
     method: "PATCH",
-    body: JSON.stringify({ nombre, phone_number }),
+    body: JSON.stringify({ nombre, phone_number, gestoria_software }),
   });
   await globalMutate("/dashboard/gestoria");
 }
@@ -426,6 +478,93 @@ export interface FiscalSummary {
 export function useFiscalSummary(cuentaId: string | undefined, year: number) {
   return useSWR<FiscalSummary>(
     cuentaId ? `/dashboard/cuentas/${cuentaId}/fiscal-summary?year=${year}` : null,
+    swrFetcher,
+    NORMAL,
+  );
+}
+
+// ---- Document Review ----
+
+export interface DocumentDetail extends Document {
+  gestoria_id: string;
+  cuenta_id: string;
+  extracted_data: Record<string, unknown> | null;
+  contact_refs: ContactRef[];
+  review_status: "pending" | "reviewed";
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  storage_path?: string;
+  mime_type?: string;
+}
+
+export interface ReviewQueueItem {
+  cuenta_id: string;
+  cuenta_nombre: string;
+  doc_hash: string;
+  document_type: string | null;
+  filename: string | null;
+  created_at: string | null;
+}
+
+export interface ReviewResponse {
+  ok: boolean;
+  next: ReviewQueueItem | null;
+}
+
+export async function getDocument(cuentaId: string, docHash: string): Promise<DocumentDetail> {
+  return request<DocumentDetail>(`/dashboard/cuentas/${cuentaId}/documentos/${docHash}`);
+}
+
+export async function updateDocument(
+  cuentaId: string,
+  docHash: string,
+  data: {
+    normalized_data?: Record<string, unknown>;
+    document_type?: string;
+  }
+): Promise<DocumentDetail> {
+  return request<DocumentDetail>(
+    `/dashboard/cuentas/${cuentaId}/documentos/${docHash}`,
+    { method: "PATCH", body: JSON.stringify(data) }
+  );
+}
+
+export async function reviewDocument(
+  cuentaId: string,
+  docHash: string,
+  data: { changes?: Record<string, unknown> }
+): Promise<ReviewResponse> {
+  return request<ReviewResponse>(
+    `/dashboard/cuentas/${cuentaId}/documentos/${docHash}/review`,
+    { method: "POST", body: JSON.stringify(data) }
+  );
+}
+
+export async function getReviewQueue(limit = 50): Promise<{
+  gestoria_id: string;
+  queue: ReviewQueueItem[];
+  total: number;
+  limit: number;
+}> {
+  return request(`/dashboard/review-queue?limit=${limit}`);
+}
+
+export function useDocument(cuentaId: string | undefined, docHash: string | undefined) {
+  return useSWR<DocumentDetail>(
+    cuentaId && docHash ? `/dashboard/cuentas/${cuentaId}/documentos/${docHash}` : null,
+    swrFetcher,
+    NORMAL,
+  );
+}
+
+export function useReviewQueue(limit = 50) {
+  return useSWR<{
+    gestoria_id: string;
+    queue: ReviewQueueItem[];
+    total: number;
+    limit: number;
+  }>(
+    `/dashboard/review-queue?limit=${limit}`,
     swrFetcher,
     NORMAL,
   );

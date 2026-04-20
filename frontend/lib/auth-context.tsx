@@ -75,6 +75,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function signOut() {
     await fbSignOut(getFirebaseAuth());
     setGestoria(null);
+    // Clear local imports state (stored in localStorage)
+    try {
+      localStorage.removeItem("imports_state");
+    } catch (error) {
+      console.error("Failed to clear imports state:", error);
+    }
   }
 
   return (

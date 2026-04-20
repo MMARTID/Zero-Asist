@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { useAlerts } from "@/lib/api";
+import { useAlerts, useReviewQueue } from "@/lib/api";
+import { useImports } from "@/lib/use-imports";
 import { useSidebar } from "@/lib/sidebar-context";
+import { useModalParam } from "@/lib/use-modal-param";
 
 const links = [
   {
@@ -18,15 +20,6 @@ const links = [
     ),
   },
   {
-    href: "/dashboard/documentos",
-    label: "Bandeja de entrada",
-    icon: (
-      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 012.012 1.244l.256.512a2.25 2.25 0 002.013 1.244h3.218a2.25 2.25 0 002.013-1.244l.256-.512a2.25 2.25 0 012.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 00-2.15-1.588H6.911a2.25 2.25 0 00-2.15 1.588L2.35 13.177a2.25 2.25 0 00-.1.661z" />
-      </svg>
-    ),
-  },
-  {
     href: "/dashboard/cuentas",
     label: "Cuentas",
     icon: (
@@ -35,14 +28,29 @@ const links = [
       </svg>
     ),
   },
+  {
+    href: "/dashboard/documentos",
+    label: "Bandeja de entrada",
+    icon: (
+      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 012.012 1.244l.256.512a2.25 2.25 0 002.013 1.244h3.218a2.25 2.25 0 002.013-1.244l.256-.512a2.25 2.25 0 012.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 00-2.15-1.588H6.911a2.25 2.25 0 00-2.15 1.588L2.35 13.177a2.25 2.25 0 00-.1.661z" />
+      </svg>
+    ),
+  },
 ];
 
 export default function Nav() {
   const pathname = usePathname();
+  const router = useRouter();
   const { user, signOut, gestoria } = useAuth();
   const { open, setOpen } = useSidebar();
+  const { openModal } = useModalParam("crear-cuenta");
   const { data: alertsData } = useAlerts(20);
+  const { data: reviewQueueData } = useReviewQueue(50);
+  const { imports } = useImports();
   const alertCount = alertsData?.total ?? 0;
+  const reviewQueueCount = reviewQueueData?.total ?? 0;
+  const importsCount = imports.filter((imp) => imp.status === "analyzing" || imp.status === "review").length;
 
   return (
     <>
@@ -140,6 +148,76 @@ export default function Nav() {
                   {alertCount}
                 </span>
               </Link>
+            </div>
+          )}
+
+          {/* Review queue quick link */}
+          {reviewQueueCount > 0 && (
+            <div className="mt-4">
+              <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted">
+                Revisión
+              </p>
+              <Link
+                href="/dashboard/documentos"
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-green-700 hover:bg-green-50"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Cola de revisión
+                <span className="ml-auto inline-flex items-center justify-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800">
+                  {reviewQueueCount}
+                </span>
+              </Link>
+            </div>
+          )}
+
+          {/* Imports quick link */}
+          {importsCount > 0 && (
+            <div className="mt-4">
+              <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted">
+                Importaciones
+              </p>
+              {imports.map((imp) => (
+                <button
+                  key={imp.id}
+                  onClick={() => {
+                    setOpen(false);
+                    router.push(`/dashboard/importaciones/${imp.id}`);
+                  }}
+                  className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-left transition-colors ${
+                    imp.status === "analyzing"
+                      ? "text-blue-700 hover:bg-blue-50"
+                      : imp.status === "error"
+                      ? "text-red-700 hover:bg-red-50"
+                      : "text-emerald-700 hover:bg-emerald-50"
+                  }`}
+                >
+                  <svg className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                  </svg>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold">
+                      {imp.status === "analyzing" ? "Analizando..." : imp.status === "error" ? "Error" : "Revisar"}
+                    </div>
+                    <div className="text-xs opacity-75 truncate">
+                      {imp.status === "analyzing"
+                        ? "Procesando..."
+                        : `${imp.created_count}/${imp.total_count} creadas`}
+                    </div>
+                  </div>
+                  <span className={`ml-auto inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs font-semibold shrink-0 ${
+                    imp.status === "analyzing"
+                      ? "bg-blue-100 text-blue-800"
+                      : imp.status === "error"
+                      ? "bg-red-100 text-red-800"
+                      : "bg-emerald-100 text-emerald-800"
+                  }`}>
+                    {imp.status === "analyzing" ? "..." : imp.error_count > 0 ? `${imp.error_count}!` : "✓"}
+                  </span>
+                </button>
+              ))}
             </div>
           )}
         </div>
