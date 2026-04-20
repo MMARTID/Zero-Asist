@@ -780,7 +780,8 @@ def test_expense_ticket_without_tax_lines():
         "total_amount": 15.0,
     }
     result = normalize_document(raw, "expense_ticket")
-    assert result["vat_included"] is False
+    # En España, los tickets SIEMPRE incluyen IVA en el total, incluso sin desglose
+    assert result["vat_included"] is True
     assert result["tax_lines"] == []
 
 
