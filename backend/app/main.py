@@ -10,8 +10,9 @@ logging.basicConfig(
     format="%(levelname)s %(name)s: %(message)s",
 )
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.documents import router as documents_router
 from app.api.gmail import router as gmail_router
@@ -23,7 +24,7 @@ from app.api.dashboard import router as dashboard_router
 app = FastAPI()
 
 _frontend_url = os.environ.get("FRONTEND_URL", "")
-_allowed_origins = ["http://localhost:3000"]
+_allowed_origins = ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"]
 if _frontend_url:
     _allowed_origins.append(_frontend_url)
 
@@ -34,6 +35,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all for unhandled exceptions.
+
+    Starlette's ServerErrorMiddleware returns a bare 500 that bypasses
+    CORSMiddleware, so the browser never sees the CORS headers.  By
+    registering an explicit handler here the response is routed through
+    the normal middleware stack (including CORS).
+    """
+    import logging
+    logging.getLogger(__name__).exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 app.include_router(documents_router)
 app.include_router(gmail_router)

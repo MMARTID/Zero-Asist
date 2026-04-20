@@ -35,7 +35,12 @@ def _verify_firebase_token(request: Request) -> dict:
 
     # Initialise the default Firebase app once.
     if not firebase_admin._apps:
-        firebase_admin.initialize_app()
+        import os
+        options: dict = {}
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCLOUD_PROJECT")
+        if project_id:
+            options["projectId"] = project_id
+        firebase_admin.initialize_app(options=options if options else None)
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):

@@ -32,6 +32,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 class UpdateGestoriaRequest(BaseModel):
     nombre: str
     phone_number: str
+    gestoria_software: Optional[str] = None  # holded, A3, sage, or custom
 
 
 class UpdateContactRequest(BaseModel):
@@ -66,6 +67,7 @@ def get_gestoria_profile(
         "gestoria_id": gestoria_id,
         "nombre": data.get("nombre", ""),
         "phone_number": data.get("phone_number", ""),
+        "gestoria_software": data.get("gestoria_software"),
         "onboarding_complete": data.get("onboarding_complete", False),
     }
 
@@ -75,14 +77,18 @@ def update_gestoria_profile(
     body: UpdateGestoriaRequest,
     gestoria_id: str = Depends(get_current_gestoria),
 ):
-    """Update gestoría name and WhatsApp number; marks onboarding complete."""
+    """Update gestoría name, WhatsApp number, and software; marks onboarding complete."""
     db = _get_db()
+    update_data = {
+        "nombre": body.nombre,
+        "phone_number": body.phone_number,
+        "onboarding_complete": True,
+    }
+    if body.gestoria_software:
+        update_data["gestoria_software"] = body.gestoria_software
+    
     db.document(f"gestorias/{gestoria_id}").set(
-        {
-            "nombre": body.nombre,
-            "phone_number": body.phone_number,
-            "onboarding_complete": True,
-        },
+        update_data,
         merge=True,
     )
     return {
@@ -90,6 +96,7 @@ def update_gestoria_profile(
         "gestoria_id": gestoria_id,
         "nombre": body.nombre,
         "phone_number": body.phone_number,
+        "gestoria_software": body.gestoria_software,
         "onboarding_complete": True,
     }
 
@@ -228,6 +235,7 @@ def list_documents(
             "created_at": data.get("created_at"),
             "normalized": data.get("normalized_data"),
             "has_original": "storage_path" in data,
+            "review_status": data.get("review_status", "pending"),
         })
 
     return {
@@ -698,6 +706,9 @@ _ALERT_FIELDS: dict[str, list[tuple[str, str]]] = {
         ("issuer_name", "Entidad emisora no detectada"),
         ("issue_date",  "Fecha de notificación no detectada"),
     ],
+    "other": [
+        ("summary", "Descripción del documento no completada"),
+    ],
 }
 
 
@@ -786,3 +797,226 @@ def dismiss_alert(
         raise HTTPException(status_code=404, detail="Documento no encontrado")
     doc_ref.update({"alert_dismissed": True})
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Document Review Workflow
+# ---------------------------------------------------------------------------
+
+
+class UpdateDocumentRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    normalized_data: Optional[dict] = None
+    document_type: Optional[str] = None
+
+
+class ReviewDocumentRequest(BaseModel):
+    changes: Optional[dict] = None
+
+
+@router.get("/cuentas/{cuenta_id}/documentos/{doc_hash}")
+def get_document(
+    cuenta_id: str,
+    doc_hash: str,
+    gestoria_id: str = Depends(get_current_gestoria),
+):
+    """Get full details of a single document."""
+    ctx = TenantContext(gestoria_id=gestoria_id, cliente_id=cuenta_id)
+    db = _get_db()
+    
+    doc = db.collection(ctx.docs_collection).document(doc_hash).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    
+    data = doc.to_dict()
+    return {
+        "gestoria_id": gestoria_id,
+        "cuenta_id": cuenta_id,
+        "doc_hash": doc_hash,
+        "document_type": data.get("document_type"),
+        "filename": data.get("file_name"),
+        "created_at": data.get("created_at"),
+        "normalized": data.get("normalized_data"),
+        "extracted_data": data.get("extracted_data"),
+        "contact_refs": data.get("contact_refs", []),
+        "review_status": data.get("review_status", "pending"),
+        "reviewed_at": data.get("reviewed_at"),
+        "reviewed_by": data.get("reviewed_by"),
+        "has_original": "storage_path" in data,
+        "storage_path": data.get("storage_path"),
+    }
+
+
+@router.patch("/cuentas/{cuenta_id}/documentos/{doc_hash}")
+def update_document(
+    cuenta_id: str,
+    doc_hash: str,
+    body: UpdateDocumentRequest,
+    gestoria_id: str = Depends(get_current_gestoria),
+):
+    """Update normalized_data and/or document_type for a document."""
+    ctx = TenantContext(gestoria_id=gestoria_id, cliente_id=cuenta_id)
+    db = _get_db()
+    
+    doc_ref = db.collection(ctx.docs_collection).document(doc_hash)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    
+    update_data = {}
+    if body.normalized_data is not None:
+        update_data["normalized_data"] = body.normalized_data
+    if body.document_type is not None:
+        update_data["document_type"] = body.document_type
+    
+    if update_data:
+        doc_ref.update(update_data)
+    
+    # Return updated document
+    updated_doc = doc_ref.get()
+    data = updated_doc.to_dict()
+    return {
+        "gestoria_id": gestoria_id,
+        "cuenta_id": cuenta_id,
+        "doc_hash": doc_hash,
+        "document_type": data.get("document_type"),
+        "filename": data.get("file_name"),
+        "created_at": data.get("created_at"),
+        "normalized": data.get("normalized_data"),
+        "extracted_data": data.get("extracted_data"),
+        "contact_refs": data.get("contact_refs", []),
+        "review_status": data.get("review_status", "pending"),
+        "reviewed_at": data.get("reviewed_at"),
+        "reviewed_by": data.get("reviewed_by"),
+    }
+
+
+@router.post("/cuentas/{cuenta_id}/documentos/{doc_hash}/review")
+def review_document(
+    cuenta_id: str,
+    doc_hash: str,
+    body: ReviewDocumentRequest,
+    gestoria_id: str = Depends(get_current_gestoria),
+):
+    """Mark a document as reviewed and create an audit record.
+    
+    Returns information about the next pending document in the queue (if any).
+    """
+    ctx = TenantContext(gestoria_id=gestoria_id, cliente_id=cuenta_id)
+    db = _get_db()
+    
+    # Get current user email from Firebase Auth header (passed by get_current_gestoria)
+    # For now, we'll get it from the document context or use a placeholder
+    from firebase_admin import auth as fb_auth
+    try:
+        # This would need to be passed from the request somehow in a real scenario
+        # For now, use a placeholder that would be enhanced with proper auth
+        user_email = "user@gestor.es"  # TODO: pass from Firebase token
+    except:
+        user_email = "unknown@gestor.es"
+    
+    # Update document with review status
+    doc_ref = db.collection(ctx.docs_collection).document(doc_hash)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    
+    doc_ref.update({
+        "review_status": "reviewed",
+        "reviewed_at": datetime.now(timezone.utc),
+        "reviewed_by": user_email,
+    })
+    
+    # Create audit record in reviews collection
+    reviews_collection = f"gestorias/{gestoria_id}/reviews"
+    db.collection(reviews_collection).add({
+        "cuenta_id": cuenta_id,
+        "doc_hash": doc_hash,
+        "user_email": user_email,
+        "reviewed_at": datetime.now(timezone.utc),
+        "action": "reviewed",
+        "changes": body.changes or {},
+    })
+    
+    # Find next pending document globally (across all cuentas)
+    next_doc = None
+    gestoria_ref = db.document(f"gestorias/{gestoria_id}")
+    cuentas = db.collection(f"gestorias/{gestoria_id}/cuentas").get()
+    
+    for cuenta_doc in cuentas:
+        cid = cuenta_doc.id
+        ctx_search = TenantContext(gestoria_id=gestoria_id, cliente_id=cid)
+        
+        # Look for first pending document (== to avoid inequality+order_by constraint)
+        pending = (
+            db.collection(ctx_search.docs_collection)
+            .where(filter=firestore.FieldFilter("review_status", "==", "pending"))
+            .limit(1)
+            .get()
+        )
+        
+        if pending:
+            next_doc_data = pending[0].to_dict()
+            next_doc = {
+                "cuenta_id": cid,
+                "cuenta_nombre": cuenta_doc.to_dict().get("nombre", cid),
+                "doc_hash": pending[0].id,
+                "document_type": next_doc_data.get("document_type"),
+                "filename": next_doc_data.get("file_name"),
+                "created_at": next_doc_data.get("created_at"),
+            }
+            break
+    
+    return {
+        "ok": True,
+        "next": next_doc,
+    }
+
+
+@router.get("/review-queue")
+def get_review_queue(
+    limit: int = Query(default=50, ge=1, le=200),
+    gestoria_id: str = Depends(get_current_gestoria),
+):
+    """Get global queue of pending documents across all cuentas."""
+    db = _get_db()
+    
+    queue = []
+    cuentas = db.collection(f"gestorias/{gestoria_id}/cuentas").get()
+    
+    for cuenta_doc in cuentas:
+        cid = cuenta_doc.id
+        cuenta_nombre = cuenta_doc.to_dict().get("nombre", cid)
+        ctx = TenantContext(gestoria_id=gestoria_id, cliente_id=cid)
+        
+        # Query documents with review_status == "pending" (skip order_by to avoid
+        # Firestore requirement that first order_by matches the inequality field)
+        pending_docs = (
+            db.collection(ctx.docs_collection)
+            .where(filter=firestore.FieldFilter("review_status", "==", "pending"))
+            .get()
+        )
+        
+        for doc in pending_docs:
+            data = doc.to_dict()
+            queue.append({
+                "cuenta_id": cid,
+                "cuenta_nombre": cuenta_nombre,
+                "doc_hash": doc.id,
+                "document_type": data.get("document_type"),
+                "filename": data.get("file_name"),
+                "created_at": data.get("created_at"),
+            })
+    
+    # Sort globally by created_at descending and limit
+    # created_at from Firestore may be timezone-aware; use a safe fallback
+    _epoch = datetime.min.replace(tzinfo=timezone.utc)
+    queue.sort(key=lambda x: x.get("created_at") or _epoch, reverse=True)
+    
+    return {
+        "gestoria_id": gestoria_id,
+        "queue": queue[:limit],
+        "total": len(queue),
+        "limit": limit,
+    }
